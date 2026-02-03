@@ -237,12 +237,25 @@ if len(gex_filt) == 0:
     st.warning("No data")
     st.stop()
 
-# Get price data
+# Get price data - fetch more historical data for full day view
 @st.cache_data(ttl=300)
 def get_prices(ticker):
     try:
-        hist = yf.Ticker(ticker).history(period="1d", interval="5m")
-        return hist if not hist.empty else None
+        # Fetch 2 days of 5-min data to ensure we have full current day
+        hist = yf.Ticker(ticker).history(period="2d", interval="5m")
+        
+        if hist.empty:
+            return None
+        
+        # Filter to today's data only
+        today = pd.Timestamp.now().normalize()
+        hist_today = hist[hist.index.date >= today.date()]
+        
+        # If today's data is empty, use last available day
+        if hist_today.empty:
+            return hist
+        
+        return hist_today if not hist_today.empty else hist
     except:
         return None
 
@@ -250,7 +263,7 @@ prices = get_prices(TICKER)
 
 # Show diagnostic metrics
 st.caption(f"**{TICKER}** @ ${spot:.2f} | Expiry: {expiry}")
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     st.metric("Strikes", len(gex_filt))
 with col2:
@@ -260,6 +273,11 @@ with col3:
 with col4:
     net = gex_filt['net_gex'].sum()
     st.metric("Net GEX", f"{net:,.0f}")
+with col5:
+    if prices is not None:
+        st.metric("Price Bars", len(prices))
+    else:
+        st.metric("Price Bars", "N/A")
 
 st.markdown("---")
 
@@ -421,15 +439,30 @@ with col_right:
             font=dict(color='#fff', size=10),
             showlegend=False,
             xaxis_rangeslider_visible=False,
-            margin=dict(l=10, r=10, t=10, b=10)
+            margin=dict(l=10, r=10, t=10, b=10),
+            hovermode='x unified'
         )
         
-        # Important: Set y-axis ranges to match strike range
-        fig2.update_xaxes(gridcolor='#1a1f3a', showgrid=True)
+        # Important: Set ranges to show full day
+        fig2.update_xaxes(
+            gridcolor='#1a1f3a',
+            showgrid=True,
+            range=[x_min, x_max],  # Show full time range
+            fixedrange=False  # Allow zooming but start zoomed out
+        )
+        
+        # Apply to both y-axes
         fig2.update_yaxes(
             gridcolor='#1a1f3a',
             tickformat='$.0f',
-            range=[strikes.min() - 5, strikes.max() + 5]
+            range=[strikes.min() - 5, strikes.max() + 5],
+            row=1, col=1
+        )
+        fig2.update_yaxes(
+            gridcolor='#1a1f3a',
+            tickformat='$.0f',
+            range=[strikes.min() - 5, strikes.max() + 5],
+            row=2, col=1
         )
         
         st.plotly_chart(fig2, use_container_width=True)
