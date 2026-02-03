@@ -320,30 +320,34 @@ with col_right:
         total_gex = gex_filt['total_gex'].values
         
         # Normalize for color intensity
-        if len(total_gex) > 0 and total_gex.max() > 0:
-            gex_norm = total_gex / total_gex.max()
+        max_gex = total_gex.max()
+        if max_gex > 0:
+            gex_norm = total_gex / max_gex
         else:
             gex_norm = np.zeros(len(total_gex))
         
-        # Get time range from price data
-        time_start = prices.index[0]
-        time_end = prices.index[-1]
+        # Get FULL time range - this is critical!
+        x_min = prices.index.min()
+        x_max = prices.index.max()
         
-        # TOP CHART: Gamma gradient - HIGH GAMMA = GREEN (resistance), LOW = RED (support)
+        # TOP CHART: Gamma gradient zones - FULL WIDTH
         for i in range(len(strikes) - 1):
             intensity = gex_norm[i]
             
-            # High gamma concentration = GREEN (dealers provide resistance)
-            if intensity > 0.5:
-                opacity = min(0.5, intensity * 0.6)  # Increased opacity
+            # High gamma = GREEN (resistance), Low gamma = RED (support)
+            if total_gex[i] > max_gex * 0.3:  # Top 30% = green
+                opacity = min(0.7, intensity * 0.8)
                 color = f'rgba(0, 255, 0, {opacity})'
-            # Low gamma = RED (less dealer hedging pressure)
             else:
-                opacity = min(0.5, (1 - intensity) * 0.6)
+                opacity = 0.3
                 color = f'rgba(255, 0, 0, {opacity})'
             
-            fig2.add_hrect(
-                y0=strikes[i], 
+            # CRITICAL: Add shape that spans FULL x-axis
+            fig2.add_shape(
+                type="rect",
+                x0=x_min,
+                x1=x_max,
+                y0=strikes[i],
                 y1=strikes[i + 1],
                 fillcolor=color,
                 layer='below',
@@ -351,26 +355,31 @@ with col_right:
                 row=1, col=1
             )
         
-        # BOTTOM CHART: Call vs Put zones (like Charm/directional bias)
+        # BOTTOM CHART: Call vs Put dominance - FULL WIDTH
         for i in range(len(strikes) - 1):
-            strike_mid = (strikes[i] + strikes[i + 1]) / 2
-            
-            # Use call/put GEX ratio to determine color
             call_val = call_gex_vals[i] if i < len(call_gex_vals) else 0
             put_val = put_gex_vals[i] if i < len(put_gex_vals) else 0
             
-            if call_val > put_val:
-                # More call gamma = YELLOW/GOLD (dealer short calls)
-                ratio = call_val / (call_val + put_val + 0.0001)
-                opacity = min(0.5, ratio * 0.5)
-                color = f'rgba(255, 215, 0, {opacity})'
+            total = call_val + put_val
+            if total > 0:
+                if call_val > put_val:
+                    # Call dominant = YELLOW/GOLD
+                    ratio = call_val / total
+                    opacity = min(0.6, ratio * 0.7)
+                    color = f'rgba(255, 215, 0, {opacity})'
+                else:
+                    # Put dominant = BLUE
+                    ratio = put_val / total
+                    opacity = min(0.6, ratio * 0.7)
+                    color = f'rgba(74, 158, 255, {opacity})'
             else:
-                # More put gamma = BLUE (dealer short puts)
-                ratio = put_val / (call_val + put_val + 0.0001)
-                opacity = min(0.5, ratio * 0.5)
-                color = f'rgba(74, 158, 255, {opacity})'
+                color = 'rgba(100, 100, 100, 0.1)'
             
-            fig2.add_hrect(
+            # CRITICAL: Full width shape
+            fig2.add_shape(
+                type="rect",
+                x0=x_min,
+                x1=x_max,
                 y0=strikes[i],
                 y1=strikes[i + 1],
                 fillcolor=color,
@@ -379,7 +388,7 @@ with col_right:
                 row=2, col=1
             )
         
-        # Add candlesticks AFTER gradients (on top layer)
+        # Add candlesticks AFTER gradients (on top)
         for row in [1, 2]:
             fig2.add_trace(
                 go.Candlestick(
@@ -415,8 +424,13 @@ with col_right:
             margin=dict(l=10, r=10, t=10, b=10)
         )
         
-        fig2.update_xaxes(gridcolor='#1a1f3a')
-        fig2.update_yaxes(gridcolor='#1a1f3a', tickformat='$.0f')
+        # Important: Set y-axis ranges to match strike range
+        fig2.update_xaxes(gridcolor='#1a1f3a', showgrid=True)
+        fig2.update_yaxes(
+            gridcolor='#1a1f3a',
+            tickformat='$.0f',
+            range=[strikes.min() - 5, strikes.max() + 5]
+        )
         
         st.plotly_chart(fig2, use_container_width=True)
     else:
