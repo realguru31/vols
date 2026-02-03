@@ -7,9 +7,10 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+from scipy.interpolate import interp1d
 
 # Page config
-st.set_page_config(page_title="GEX Analyzer", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="GEX Analyzer - VolSignals Style", layout="wide", initial_sidebar_state="collapsed")
 
 # Custom CSS
 st.markdown("""
@@ -17,26 +18,23 @@ st.markdown("""
     .main {background-color: #0a0e27;}
     .stApp {background-color: #0a0e27;}
     h1, h2, h3, h4 {color: #ffffff !important;}
+    .stMarkdown {color: #ffffff;}
 </style>
 """, unsafe_allow_html=True)
 
-# Fetch Barchart data - EXACT COPY from your working code
+# Fetch Barchart data
 @st.cache_data(ttl=300)
 def fetch_barchart_options(ticker_symbol, expiry_offset=0):
     try:
-        # Get expiration dates from yfinance
         ticker_yf = yf.Ticker(ticker_symbol)
         expiry_dates = ticker_yf.options
         
         if not expiry_dates or expiry_offset >= len(expiry_dates):
             return None
         
-        next_expiry_date = expiry_dates[expiry_offset]
-        
-        # Get spot price
+        expiry = expiry_dates[expiry_offset]
         spot = ticker_yf.history(period="1d")['Close'].iloc[-1]
         
-        # URLs and Headers - EXACT from your code
         geturl = f'https://www.barchart.com/etfs-funds/quotes/{ticker_symbol}/volatility-greeks'
         apiurl = 'https://www.barchart.com/proxies/core-api/v1/options/get'
         
@@ -51,9 +49,8 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
         
         getpay = {'page': 'all'}
         
-        # Initial session and page request
         s = requests.Session()
-        r = s.get(geturl, params=getpay, headers=getheaders)
+        r = s.get(geturl, params=getpay, headers=getheaders, timeout=10)
         r.raise_for_status()
         
         headers = {
@@ -68,7 +65,7 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
         payload = {
             'baseSymbol': ticker_symbol,
             'groupBy': 'optionType',
-            'expirationDate': next_expiry_date,
+            'expirationDate': expiry,
             'meta': 'field.shortName,expirations,field.description',
             'orderBy': 'strikePrice',
             'orderDir': 'asc',
@@ -76,40 +73,27 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
             'fields': 'symbol,baseSymbol,strikePrice,lastPrice,volatility,delta,gamma,theta,vega,rho,volume,openInterest,optionType,daysToExpiration,expirationDate,tradeTime,averageVolatility,historicVolatility30d'
         }
         
-        # API request for options data
-        r = s.get(apiurl, params=payload, headers=headers)
+        r = s.get(apiurl, params=payload, headers=headers, timeout=10)
         r.raise_for_status()
         data = r.json()
         
-        # Extract data
         data_list = []
         for option_type, options in data['data'].items():
             for option in options:
                 option['optionType'] = option_type
                 data_list.append(option)
         
-        # Convert to DataFrame
         df = pd.DataFrame(data_list)
-        
-        # Select relevant columns and convert numeric ones to float
         df['strikePrice'] = pd.to_numeric(df['strikePrice'], errors='coerce')
-        df['gamma'] = pd.to_numeric(df['gamma'], errors='coerce')
         df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').fillna(0).astype(int)
-        df['optionType'] = df['optionType'].astype(str)
+        df['gamma'] = pd.to_numeric(df['gamma'], errors='coerce').fillna(0)
+        df['theta'] = pd.to_numeric(df['theta'], errors='coerce').fillna(0)
         
-        # Create separate DataFrames for Calls and Puts
-        df_calls = df[df['optionType'] == 'Call'].copy()
-        df_puts = df[df['optionType'] == 'Put'].copy()
+        calls = df[df['optionType'] == 'Call'].copy()
+        puts = df[df['optionType'] == 'Put'].copy()
         
-        return {
-            'spot': spot,
-            'expiry': next_expiry_date,
-            'calls': df_calls,
-            'puts': df_puts
-        }
-        
-    except Exception as e:
-        st.error(f"Fetch error: {str(e)}")
+        return {'spot': spot, 'expiry': expiry, 'calls': calls, 'puts': puts}
+    except:
         return None
 
 # Compute GEX
@@ -122,14 +106,12 @@ def compute_gex(calls, puts):
             continue
         
         call_gex = put_gex = 0
-        call_oi = put_oi = 0
         
         call_data = calls[calls['strikePrice'] == K]
         if not call_data.empty:
             row = call_data.iloc[0]
             oi = int(row['openInterest'])
             gamma = float(row['gamma'])
-            call_oi = oi
             if oi > 0 and gamma > 0:
                 call_gex = gamma * oi * 100
         
@@ -138,7 +120,6 @@ def compute_gex(calls, puts):
             row = put_data.iloc[0]
             oi = int(row['openInterest'])
             gamma = float(row['gamma'])
-            put_oi = oi
             if oi > 0 and gamma > 0:
                 put_gex = gamma * oi * 100
         
@@ -147,15 +128,13 @@ def compute_gex(calls, puts):
             'call_gex': call_gex,
             'put_gex': put_gex,
             'net_gex': call_gex - put_gex,
-            'total_gex': call_gex + put_gex,
-            'call_oi': call_oi,
-            'put_oi': put_oi
+            'total_gex': call_gex + put_gex
         })
     
     return pd.DataFrame(gex_data)
 
 # Title
-st.markdown("## 📊 GEX Profile Analyzer - VolSignals Style")
+st.markdown("## 📊 GEX Profile Analyzer")
 
 # Controls
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -164,18 +143,17 @@ with col1:
 with col2:
     EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed")
 with col3:
-    RANGE_PCT = st.slider("Range %", 5, 30, 15, key="range", label_visibility="collapsed")
+    RANGE_PCT = st.slider("Range", 5, 30, 15, key="range", label_visibility="collapsed")
 with col4:
     if st.button("🔄"):
         st.cache_data.clear()
         st.rerun()
 
 # Fetch data
-with st.spinner("Loading..."):
-    result = fetch_barchart_options(TICKER, EXPIRY)
-    if not result:
-        st.error("Failed to fetch data")
-        st.stop()
+result = fetch_barchart_options(TICKER, EXPIRY)
+if not result:
+    st.error("Failed to fetch data")
+    st.stop()
 
 spot = result['spot']
 expiry = result['expiry']
@@ -190,11 +168,8 @@ gex_filt = gex_df[
 ]
 
 if len(gex_filt) == 0:
-    st.warning("No data in range")
+    st.warning("No data")
     st.stop()
-
-# Metrics
-st.caption(f"{TICKER} @ ${spot:.2f} | {expiry}")
 
 # Get price data
 @st.cache_data(ttl=300)
@@ -325,4 +300,4 @@ with col_right:
         st.warning("No price data")
 
 # Footer
-st.caption(f"Barchart + YFinance | {datetime.now().strftime('%H:%M')}")
+st.caption(f"{TICKER} @ ${spot:.2f} | {expiry} | Barchart + YFinance | {datetime.now().strftime('%H:%M')}")
