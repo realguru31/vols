@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from scipy.interpolate import interp1d
+import time
 
 # Page config
 st.set_page_config(page_title="GEX Analyzer - VolSignals Style", layout="wide", initial_sidebar_state="collapsed")
@@ -22,12 +23,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper function to get yfinance data with retry
+def get_yfinance_data_with_retry(ticker_symbol, max_retries=3):
+    """Get yfinance data with exponential backoff retry"""
+    for attempt in range(max_retries):
+        try:
+            ticker_yf = yf.Ticker(ticker_symbol)
+            expiry_dates = ticker_yf.options
+            spot = ticker_yf.history(period="1d")['Close'].iloc[-1]
+            return expiry_dates, spot, None
+        except Exception as e:
+            if "Rate limit" in str(e) or "Too Many Requests" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2  # 2, 4, 8 seconds
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return None, None, f"Yahoo Finance rate limit exceeded. Please wait a few minutes and try again."
+            else:
+                return None, None, f"YFinance error: {str(e)}"
+    return None, None, "Failed after retries"
+
 # Fetch Barchart data
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)  # Increased cache time to 10 minutes
+def fetch_barchart_options(ticker_symbol, expiry_offset=0):
 def fetch_barchart_options(ticker_symbol, expiry_offset=0):
     try:
-        ticker_yf = yf.Ticker(ticker_symbol)
-        expiry_dates = ticker_yf.options
+        # Get expiration dates from yfinance with retry logic
+        expiry_dates, spot, error = get_yfinance_data_with_retry(ticker_symbol)
+        
+        if error:
+            return {'error': error, 'type': 'YFinanceRateLimitError', 'traceback': 'Yahoo Finance is rate limiting requests. Wait 2-5 minutes and refresh.'}
         
         if not expiry_dates:
             return {'error': f'No expiration dates found for {ticker_symbol}', 'type': 'NoOptionsError', 'traceback': 'Ticker has no options data available'}
@@ -36,7 +62,6 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
             return {'error': f'Expiry offset {expiry_offset} too high, only {len(expiry_dates)} dates available', 'type': 'OffsetError', 'traceback': f'Available dates: {expiry_dates[:5]}'}
         
         expiry = expiry_dates[expiry_offset]
-        spot = ticker_yf.history(period="1d")['Close'].iloc[-1]
         
         geturl = f'https://www.barchart.com/etfs-funds/quotes/{ticker_symbol}/volatility-greeks'
         apiurl = 'https://www.barchart.com/proxies/core-api/v1/options/get'
@@ -151,6 +176,9 @@ def compute_gex(calls, puts):
 # Title
 st.markdown("## 📊 GEX Profile Analyzer")
 
+# Rate limit warning
+st.info("⚠️ **Note:** If you see rate limit errors, wait 2-5 minutes before refreshing. Yahoo Finance limits requests from cloud IPs.")
+
 # Controls
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
 with col1:
@@ -173,10 +201,24 @@ if not result:
     st.stop()
 
 if 'error' in result:
-    st.error(f"❌ Failed to fetch data")
-    st.error(f"**Error Type:** {result['type']}")
-    st.error(f"**Error Message:** {result['error']}")
-    with st.expander("🔍 Full Traceback (click to expand)"):
+    if 'rate limit' in result['error'].lower():
+        st.error("🚫 Yahoo Finance Rate Limit Reached")
+        st.warning("""
+        **What happened?** Yahoo Finance is limiting requests from Streamlit Cloud.
+        
+        **Solutions:**
+        1. ⏰ Wait 2-5 minutes and click the refresh button (🔄)
+        2. 🔄 Clear your browser cache and reload
+        3. 💻 Run this app locally (no rate limits on your own IP)
+        
+        **Why does this happen?** Streamlit Cloud shares IP addresses, so Yahoo sees many requests from the same source.
+        """)
+    else:
+        st.error(f"❌ Failed to fetch data")
+        st.error(f"**Error Type:** {result['type']}")
+        st.error(f"**Error Message:** {result['error']}")
+    
+    with st.expander("🔍 Technical Details"):
         st.code(result['traceback'])
     st.stop()
 
@@ -206,6 +248,21 @@ def get_prices(ticker):
         return None
 
 prices = get_prices(TICKER)
+
+# Show diagnostic metrics
+st.caption(f"**{TICKER}** @ ${spot:.2f} | Expiry: {expiry}")
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("Strikes", len(gex_filt))
+with col2:
+    st.metric("Max Call GEX", f"{gex_filt['call_gex'].max():,.0f}")
+with col3:
+    st.metric("Max Put GEX", f"{gex_filt['put_gex'].max():,.0f}")
+with col4:
+    net = gex_filt['net_gex'].sum()
+    st.metric("Net GEX", f"{net:,.0f}")
+
+st.markdown("---")
 
 # Layout
 col_left, col_right = st.columns([1, 2])
@@ -255,40 +312,75 @@ with col_left:
 with col_right:
     st.markdown("#### Gamma & Charm Gradients")
     
-    if prices is not None:
+    if prices is not None and len(prices) > 0:
         fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
         
         strikes = gex_filt['strike'].values
+        call_gex_vals = gex_filt['call_gex'].values
+        put_gex_vals = gex_filt['put_gex'].values
         total_gex = gex_filt['total_gex'].values
         
-        # Normalize
+        # Normalize for color intensity
         if len(total_gex) > 0 and total_gex.max() > 0:
             gex_norm = total_gex / total_gex.max()
         else:
             gex_norm = np.zeros(len(total_gex))
         
-        # TOP: Gamma gradient (green high, red low)
+        # Get time range from price data
+        time_start = prices.index[0]
+        time_end = prices.index[-1]
+        
+        # TOP CHART: Gamma gradient - HIGH GAMMA = GREEN (resistance), LOW = RED (support)
         for i in range(len(strikes) - 1):
             intensity = gex_norm[i]
+            
+            # High gamma concentration = GREEN (dealers provide resistance)
             if intensity > 0.5:
-                color = f'rgba(0, 255, 0, {intensity * 0.4})'
+                opacity = min(0.5, intensity * 0.6)  # Increased opacity
+                color = f'rgba(0, 255, 0, {opacity})'
+            # Low gamma = RED (less dealer hedging pressure)
             else:
-                color = f'rgba(255, 0, 0, {(1 - intensity) * 0.4})'
+                opacity = min(0.5, (1 - intensity) * 0.6)
+                color = f'rgba(255, 0, 0, {opacity})'
             
-            fig2.add_hrect(y0=strikes[i], y1=strikes[i + 1],
-                          fillcolor=color, line_width=0, row=1, col=1)
+            fig2.add_hrect(
+                y0=strikes[i], 
+                y1=strikes[i + 1],
+                fillcolor=color,
+                layer='below',
+                line_width=0,
+                row=1, col=1
+            )
         
-        # BOTTOM: Charm gradient (yellow above, blue below)
+        # BOTTOM CHART: Call vs Put zones (like Charm/directional bias)
         for i in range(len(strikes) - 1):
-            if strikes[i] > spot:
-                color = 'rgba(255, 215, 0, 0.25)'
-            else:
-                color = 'rgba(74, 158, 255, 0.25)'
+            strike_mid = (strikes[i] + strikes[i + 1]) / 2
             
-            fig2.add_hrect(y0=strikes[i], y1=strikes[i + 1],
-                          fillcolor=color, line_width=0, row=2, col=1)
+            # Use call/put GEX ratio to determine color
+            call_val = call_gex_vals[i] if i < len(call_gex_vals) else 0
+            put_val = put_gex_vals[i] if i < len(put_gex_vals) else 0
+            
+            if call_val > put_val:
+                # More call gamma = YELLOW/GOLD (dealer short calls)
+                ratio = call_val / (call_val + put_val + 0.0001)
+                opacity = min(0.5, ratio * 0.5)
+                color = f'rgba(255, 215, 0, {opacity})'
+            else:
+                # More put gamma = BLUE (dealer short puts)
+                ratio = put_val / (call_val + put_val + 0.0001)
+                opacity = min(0.5, ratio * 0.5)
+                color = f'rgba(74, 158, 255, {opacity})'
+            
+            fig2.add_hrect(
+                y0=strikes[i],
+                y1=strikes[i + 1],
+                fillcolor=color,
+                layer='below',
+                line_width=0,
+                row=2, col=1
+            )
         
-        # Candlesticks on both
+        # Add candlesticks AFTER gradients (on top layer)
         for row in [1, 2]:
             fig2.add_trace(
                 go.Candlestick(
@@ -299,13 +391,20 @@ with col_right:
                     close=prices['Close'],
                     increasing_line_color='#00FF00',
                     decreasing_line_color='#FF0000',
-                    line=dict(width=1)
+                    increasing_fillcolor='rgba(0,255,0,0.3)',
+                    decreasing_fillcolor='rgba(255,0,0,0.3)',
+                    line=dict(width=1),
+                    showlegend=False
                 ),
                 row=row, col=1
             )
             
             # Spot line
-            fig2.add_hline(y=spot, line=dict(color='#FFD700', width=2, dash='dot'), row=row, col=1)
+            fig2.add_hline(
+                y=spot, 
+                line=dict(color='#FFD700', width=2, dash='dot'),
+                row=row, col=1
+            )
         
         fig2.update_layout(
             height=850,
@@ -322,7 +421,7 @@ with col_right:
         
         st.plotly_chart(fig2, use_container_width=True)
     else:
-        st.warning("No price data")
+        st.warning("No price data available")
 
 # Footer
-st.caption(f"{TICKER} @ ${spot:.2f} | {expiry} | Barchart + YFinance | {datetime.now().strftime('%H:%M')}")
+st.caption(f"Data: Barchart + YFinance | Updated: {datetime.now().strftime('%H:%M:%S')}")
