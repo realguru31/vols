@@ -1,0 +1,26 @@
+[server]
+   port = 8501
+   address = "0.0.0.0"
+   headless = true
+   enableCORS = false
+   
+   [browser]
+   gatherUsageStats = false
+   
+   [theme]
+   primaryColor = "#1f77b4"
+   backgroundColor = "#0e1117"
+   secondaryBackgroundColor = "#262730"
+   textColor = "#fafafa"
+```
+4. Click **"Commit new file"**
+
+---
+
+## ✅ Final Structure Should Look Like:
+```
+vols/
+├── app.py
+├── requirements.txt
+└── .streamlit/
+    └── config.toml
