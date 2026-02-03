@@ -305,7 +305,7 @@ if prices is not None and len(prices) > 0:
         row_heights=[0.5, 0.5]
     )
     
-    # TOP: Total Gamma Heatmap
+    # TOP: Total Gamma Heatmap - FIXED colorbar syntax
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
@@ -319,8 +319,10 @@ if prices is not None and len(prices) > 0:
             ],
             showscale=True,
             colorbar=dict(
-                title="Gamma Density",
-                titlefont=dict(color='white'),
+                title=dict(
+                    text="Gamma Density",
+                    font=dict(color='white')
+                ),
                 tickfont=dict(color='white')
             ),
             hovertemplate="Time: %{x}<br>Strike: $%{y:.0f}<br>Gamma: %{z:,.0f}<extra></extra>",
@@ -329,7 +331,7 @@ if prices is not None and len(prices) > 0:
         row=1, col=1
     )
     
-    # BOTTOM: Net GEX Heatmap
+    # BOTTOM: Net GEX Heatmap - FIXED colorbar syntax
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
@@ -345,8 +347,10 @@ if prices is not None and len(prices) > 0:
             zmid=0,
             showscale=True,
             colorbar=dict(
-                title="Net GEX",
-                titlefont=dict(color='white'),
+                title=dict(
+                    text="Net GEX",
+                    font=dict(color='white')
+                ),
                 tickfont=dict(color='white')
             ),
             hovertemplate="Time: %{x}<br>Strike: $%{y:.0f}<br>Net GEX: %{z:,.0f}<extra></extra>",
