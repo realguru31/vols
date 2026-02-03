@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from urllib.parse import unquote
-from datetime import datetime
+from datetime import datetime, timedelta
 import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -328,6 +328,19 @@ with col_left:
 
 with col_right:
     st.markdown("#### Gamma & Charm Gradients")
+    with st.expander("ℹ️ Gradient Logic", expanded=False):
+        st.markdown("""
+        **TOP Chart (Gamma Density):**
+        - 🟢 **GREEN** = High GEX concentration (strong dealer gamma = resistance)
+        - 🟡 **YELLOW** = Medium GEX
+        - 🔴 **RED** = Low GEX (weak support/resistance)
+        
+        **BOTTOM Chart (Call/Put Dominance):**
+        - 🟡 **YELLOW** = Call gamma > Put gamma (dealers short calls)
+        - 🔵 **BLUE** = Put gamma > Call gamma (dealers short puts)
+        
+        *Gradients span full trading day (9:30 AM - 4:00 PM ET)*
+        """)
     
     if prices is not None and len(prices) > 0:
         fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
@@ -344,23 +357,36 @@ with col_right:
         else:
             gex_norm = np.zeros(len(total_gex))
         
-        # Get FULL time range - this is critical!
-        x_min = prices.index.min()
-        x_max = prices.index.max()
+        # CRITICAL FIX: Set explicit full trading day range (9:30 AM to 4:00 PM ET)
+        today = pd.Timestamp.now(tz='America/New_York').normalize()
+        market_open = today + timedelta(hours=9, minutes=30)
+        market_close = today + timedelta(hours=16)
         
-        # TOP CHART: Gamma gradient zones - FULL WIDTH
+        # Use the widest possible range - either price data or full market hours
+        x_min = min(prices.index.min(), market_open) if not prices.empty else market_open
+        x_max = max(prices.index.max(), market_close) if not prices.empty else market_close
+        
+        # TOP CHART: Gamma gradient zones - Based on GEX density at each STRIKE
+        # Logic: High GEX concentration = HIGH GAMMA = GREEN (resistance)
+        #        Low GEX = RED (less dealer activity)
         for i in range(len(strikes) - 1):
-            intensity = gex_norm[i]
+            gex_at_strike = total_gex[i]
             
-            # High gamma = GREEN (resistance), Low gamma = RED (support)
-            if total_gex[i] > max_gex * 0.3:  # Top 30% = green
-                opacity = min(0.7, intensity * 0.8)
+            # Color based on GEX magnitude (like VolSignals)
+            if gex_at_strike > max_gex * 0.4:  # Top 40% = strong gamma
+                # GREEN = High gamma concentration (dealer resistance)
+                opacity = min(0.7, (gex_at_strike / max_gex) * 0.8)
                 color = f'rgba(0, 255, 0, {opacity})'
+            elif gex_at_strike > max_gex * 0.15:  # Middle tier
+                # Transitional yellow-green
+                opacity = 0.4
+                color = f'rgba(200, 255, 0, {opacity})'
             else:
+                # RED = Low gamma (less support/resistance)
                 opacity = 0.3
                 color = f'rgba(255, 0, 0, {opacity})'
             
-            # CRITICAL: Add shape that spans FULL x-axis
+            # CRITICAL: Shapes must span FULL time range
             fig2.add_shape(
                 type="rect",
                 x0=x_min,
@@ -373,7 +399,7 @@ with col_right:
                 row=1, col=1
             )
         
-        # BOTTOM CHART: Call vs Put dominance - FULL WIDTH
+        # BOTTOM CHART: Call vs Put dominance zones
         for i in range(len(strikes) - 1):
             call_val = call_gex_vals[i] if i < len(call_gex_vals) else 0
             put_val = put_gex_vals[i] if i < len(put_gex_vals) else 0
@@ -381,19 +407,19 @@ with col_right:
             total = call_val + put_val
             if total > 0:
                 if call_val > put_val:
-                    # Call dominant = YELLOW/GOLD
+                    # YELLOW/GOLD = Call gamma dominant
                     ratio = call_val / total
                     opacity = min(0.6, ratio * 0.7)
                     color = f'rgba(255, 215, 0, {opacity})'
                 else:
-                    # Put dominant = BLUE
+                    # BLUE = Put gamma dominant
                     ratio = put_val / total
                     opacity = min(0.6, ratio * 0.7)
                     color = f'rgba(74, 158, 255, {opacity})'
             else:
                 color = 'rgba(100, 100, 100, 0.1)'
             
-            # CRITICAL: Full width shape
+            # Span full time range
             fig2.add_shape(
                 type="rect",
                 x0=x_min,
@@ -470,4 +496,8 @@ with col_right:
         st.warning("No price data available")
 
 # Footer
-st.caption(f"Data: Barchart + YFinance | Updated: {datetime.now().strftime('%H:%M:%S')}")
+if prices is not None and len(prices) > 0:
+    time_range = f"{prices.index.min().strftime('%H:%M')} - {prices.index.max().strftime('%H:%M')}"
+    st.caption(f"Data: Barchart + YFinance | Price Range: {time_range} | Updated: {datetime.now().strftime('%H:%M:%S')}")
+else:
+    st.caption(f"Data: Barchart + YFinance | Updated: {datetime.now().strftime('%H:%M:%S')}")
