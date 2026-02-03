@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 import time
 
 # Page config
@@ -35,7 +36,7 @@ def get_yfinance_data_with_retry(ticker_symbol, max_retries=3):
         except Exception as e:
             if "Rate limit" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 2
+                    wait_time = (2 ** attempt) * 2  # 2, 4, 8 seconds
                     time.sleep(wait_time)
                     continue
                 else:
@@ -45,9 +46,10 @@ def get_yfinance_data_with_retry(ticker_symbol, max_retries=3):
     return None, None, "Failed after retries"
 
 # Fetch Barchart data
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600)  # Increased cache time to 10 minutes
 def fetch_barchart_options(ticker_symbol, expiry_offset=0):
     try:
+        # Get expiration dates from yfinance with retry logic
         expiry_dates, spot, error = get_yfinance_data_with_retry(ticker_symbol)
         
         if error:
@@ -172,7 +174,7 @@ def compute_gex(calls, puts):
     return pd.DataFrame(gex_data)
 
 # Title
-st.markdown("## 📊 GEX Profile Analyzer - VolSignals Style")
+st.markdown("## 📊 GEX Profile Analyzer")
 
 # Rate limit warning
 st.info("⚠️ **Note:** If you see rate limit errors, wait 2-5 minutes before refreshing. Yahoo Finance limits requests from cloud IPs.")
@@ -327,130 +329,91 @@ with col_left:
 
 with col_right:
     st.markdown("#### Gamma & Charm Gradients")
+    with st.expander("ℹ️ Gradient Logic", expanded=False):
+        st.markdown("""
+        **TOP Chart (Gamma Density):**
+        - 🟢 **GREEN** = High total GEX (>60% of max)
+        - 🟡 **YELLOW** = Medium GEX (30-60%)  
+        - 🔴 **RED** = Low GEX (<30%)
+        
+        **BOTTOM Chart (Call/Put Dominance):**
+        - 🟡 **YELLOW** = Call gamma > Put gamma
+        - 🔵 **BLUE** = Put gamma > Call gamma
+        
+        *Uses Gaussian smoothing (σ=1.5) like professional tools*
+        """)
     
     if prices is not None and len(prices) > 0:
-        # Create gradient-filled area chart (like your examples)
         fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
         
         strikes = gex_filt['strike'].values
+        call_gex_vals = gex_filt['call_gex'].values
+        put_gex_vals = gex_filt['put_gex'].values
         total_gex = gex_filt['total_gex'].values
-        net_gex = gex_filt['net_gex'].values
         
-        # Create smooth interpolated curves
+        # Full trading day range
+        today = pd.Timestamp.now(tz='America/New_York').normalize()
+        market_open = today + timedelta(hours=9, minutes=30)
+        market_close = today + timedelta(hours=16)
+        x_min = min(prices.index.min(), market_open) if not prices.empty else market_open
+        x_max = max(prices.index.max(), market_close) if not prices.empty else market_close
+        
+        # Smooth GEX using Gaussian filter (like matplotlib version)
         if len(strikes) > 3:
-            # Create fine grid for smooth interpolation
-            fine_strikes = np.linspace(strikes.min(), strikes.max(), 300)
-            
-            # Interpolate total GEX
-            f_total = interp1d(strikes, total_gex, kind='cubic', fill_value=0, bounds_error=False)
-            total_gex_smooth = np.maximum(0, f_total(fine_strikes))
-            
-            # Interpolate net GEX
-            f_net = interp1d(strikes, net_gex, kind='cubic', fill_value=0, bounds_error=False)
-            net_gex_smooth = f_net(fine_strikes)
+            total_gex_smooth = gaussian_filter1d(total_gex, sigma=1.5)
+            call_gex_smooth = gaussian_filter1d(call_gex_vals, sigma=1.5)
+            put_gex_smooth = gaussian_filter1d(put_gex_vals, sigma=1.5)
         else:
-            fine_strikes = strikes
             total_gex_smooth = total_gex
-            net_gex_smooth = net_gex
+            call_gex_smooth = call_gex_vals
+            put_gex_smooth = put_gex_vals
         
-        # TOP CHART: Gamma Density Gradient (like first example image)
-        # Create gradient effect using multiple filled areas with varying opacity
+        max_gex = total_gex_smooth.max() if total_gex_smooth.max() > 0 else 1
         
-        # Normalize for gradient effect
-        max_gamma = total_gex_smooth.max() if total_gex_smooth.max() > 0 else 1
-        
-        # Create gradient by stacking multiple semi-transparent areas
-        num_gradient_layers = 10
-        for i in range(num_gradient_layers):
-            # Calculate opacity based on layer (darker at high gamma)
-            opacity = 0.3 * (i + 1) / num_gradient_layers
+        # TOP CHART: Simple colored horizontal bands
+        for i in range(len(strikes)):
+            intensity = total_gex_smooth[i] / max_gex
             
-            # Create threshold for this layer
-            threshold = max_gamma * (i / num_gradient_layers)
-            
-            # Create filled area for this gradient layer
-            layer_values = np.where(total_gex_smooth >= threshold, total_gex_smooth, 0)
-            
-            # Create gradient color from red to green based on gamma intensity
-            intensity = i / num_gradient_layers
+            # Color based on gamma intensity
             if intensity > 0.6:
-                # High gamma = GREEN
-                color = f'rgba(0, 255, 0, {opacity})'
+                color = 'rgba(0, 255, 0, 0.7)'  # Green
             elif intensity > 0.3:
-                # Medium = YELLOW/GREEN blend
-                green_component = int(255 * (intensity - 0.3) / 0.3)
-                color = f'rgba({255-green_component}, 255, 0, {opacity})'
-            elif intensity > 0.1:
-                # Low-medium = ORANGE
-                color = f'rgba(255, 150, 0, {opacity})'
+                color = 'rgba(255, 215, 0, 0.6)'  # Yellow
             else:
-                # Very low = RED
-                color = f'rgba(255, 0, 0, {opacity})'
+                color = 'rgba(255, 0, 0, 0.5)'  # Red
             
-            # Add filled area for this gradient layer
             fig2.add_trace(
                 go.Scatter(
-                    x=prices.index,
-                    y=[fine_strikes[np.argmax(layer_values)]] * len(prices.index),
-                    fill='toself',
-                    fillcolor=color,
-                    line=dict(width=0),
+                    x=[x_min, x_max],
+                    y=[strikes[i], strikes[i]],
+                    mode='lines',
+                    line=dict(color=color, width=6),
                     showlegend=False,
                     hoverinfo='skip'
                 ),
                 row=1, col=1
             )
         
-        # BOTTOM CHART: Call/Put Dominance Gradient
-        # Create gradient for net GEX (blue for puts, yellow/gold for calls)
-        
-        # Find min and max for normalization
-        max_abs_net = max(abs(net_gex_smooth.min()), abs(net_gex_smooth.max())) if len(net_gex_smooth) > 0 else 1
-        
-        num_dominance_layers = 10
-        for i in range(num_dominance_layers):
-            opacity = 0.3 * (i + 1) / num_dominance_layers
-            
-            # Create threshold for this layer
-            threshold_abs = max_abs_net * (i / num_dominance_layers)
-            
-            # Create mask for this layer
-            if max_abs_net > 0:
-                layer_mask = abs(net_gex_smooth) >= threshold_abs
-                layer_net = np.where(layer_mask, net_gex_smooth, 0)
+        # BOTTOM CHART: Call vs Put colored bands  
+        for i in range(len(strikes)):
+            if call_gex_smooth[i] > put_gex_smooth[i]:
+                color = 'rgba(255, 215, 0, 0.7)'  # Yellow
             else:
-                layer_net = np.zeros_like(net_gex_smooth)
+                color = 'rgba(74, 158, 255, 0.7)'  # Blue
             
-            # Determine color based on sign (calls vs puts)
-            avg_sign = np.sign(np.mean(layer_net[layer_mask])) if np.any(layer_mask) else 0
-            
-            if avg_sign > 0.1:
-                # Call dominant = YELLOW/GOLD
-                color = f'rgba(255, 215, 0, {opacity})'
-            elif avg_sign < -0.1:
-                # Put dominant = BLUE
-                color = f'rgba(74, 158, 255, {opacity})'
-            else:
-                # Balanced = blend
-                color = f'rgba(165, 186, 128, {opacity})'
-            
-            # Add filled area
-            if np.any(layer_mask):
-                dominant_strike = fine_strikes[np.argmax(abs(layer_net))]
-                fig2.add_trace(
-                    go.Scatter(
-                        x=prices.index,
-                        y=[dominant_strike] * len(prices.index),
-                        fill='toself',
-                        fillcolor=color,
-                        line=dict(width=0),
-                        showlegend=False,
-                        hoverinfo='skip'
-                    ),
-                    row=2, col=1
-                )
+            fig2.add_trace(
+                go.Scatter(
+                    x=[x_min, x_max],
+                    y=[strikes[i], strikes[i]],
+                    mode='lines',
+                    line=dict(color=color, width=6),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ),
+                row=2, col=1
+            )
         
-        # Add candlesticks on top
+        # Add candlesticks AFTER gradients (on top)
         for row in [1, 2]:
             fig2.add_trace(
                 go.Candlestick(
@@ -476,96 +439,42 @@ with col_right:
                 row=row, col=1
             )
         
-        # Add gamma curve on top of gradient
-        fig2.add_trace(
-            go.Scatter(
-                x=prices.index,
-                y=[fine_strikes[np.argmax(total_gex_smooth)]] * len(prices.index),
-                mode='lines',
-                line=dict(color='white', width=1, dash='dash'),
-                name='Gamma Peak',
-                showlegend=True
-            ),
-            row=1, col=1
-        )
-        
-        # Add net GEX curve
-        fig2.add_trace(
-            go.Scatter(
-                x=prices.index,
-                y=[fine_strikes[np.argmax(abs(net_gex_smooth))]] * len(prices.index),
-                mode='lines',
-                line=dict(color='cyan', width=1, dash='dash'),
-                name='Net GEX Peak',
-                showlegend=True
-            ),
-            row=2, col=1
-        )
-        
         fig2.update_layout(
             height=850,
             plot_bgcolor='#0a0e27',
             paper_bgcolor='#0a0e27',
             font=dict(color='#fff', size=10),
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01,
-                bgcolor='rgba(10, 14, 39, 0.8)'
-            ),
+            showlegend=False,
             xaxis_rangeslider_visible=False,
             margin=dict(l=10, r=10, t=10, b=10),
             hovermode='x unified'
         )
         
-        # Set y-axis ranges
-        fig2.update_yaxes(
-            gridcolor='#1a1f3a',
-            tickformat='$.0f',
-            range=[strikes.min() - 5, strikes.max() + 5],
-            row=1, col=1,
-            title="Gamma"
-        )
-        fig2.update_yaxes(
-            gridcolor='#1a1f3a',
-            tickformat='$.0f',
-            range=[strikes.min() - 5, strikes.max() + 5],
-            row=2, col=1,
-            title="Charm/Net GEX"
-        )
-        
-        # Set x-axis time format
+        # Important: Set ranges to show full day
         fig2.update_xaxes(
             gridcolor='#1a1f3a',
-            tickformat="%H:%M",
+            showgrid=True,
+            range=[x_min, x_max],  # Show full time range
+            fixedrange=False  # Allow zooming but start zoomed out
+        )
+        
+        # Apply to both y-axes
+        fig2.update_yaxes(
+            gridcolor='#1a1f3a',
+            tickformat='$.0f',
+            range=[strikes.min() - 5, strikes.max() + 5],
+            row=1, col=1
+        )
+        fig2.update_yaxes(
+            gridcolor='#1a1f3a',
+            tickformat='$.0f',
+            range=[strikes.min() - 5, strikes.max() + 5],
             row=2, col=1
         )
         
         st.plotly_chart(fig2, use_container_width=True)
-        
-        # Add explanation
-        with st.expander("ℹ️ Gradient Logic", expanded=False):
-            st.markdown("""
-            **TOP Chart (Gamma Density) - Gradient Fill:**
-            - 🟢 **DARK GREEN** = Highest GEX concentration (strong resistance)
-            - 🟡 **YELLOW-GREEN** = Medium-high gamma
-            - 🟠 **ORANGE** = Medium-low gamma  
-            - 🔴 **LIGHT RED** = Lowest gamma (weak zones)
-            
-            **BOTTOM Chart (Call/Put Dominance):**
-            - 🟡 **GOLD/YELLOW** = Call gamma dominant (dealers short calls = resistance)
-            - 🔵 **BLUE** = Put gamma dominant (dealers short puts = support)
-            - 🟢 **GREEN** = Balanced gamma
-            
-            **White dashed line** = Gamma peak (highest concentration)
-            **Cyan dashed line** = Net GEX peak
-            
-            *Creates smooth gradient effects by stacking multiple semi-transparent filled areas*
-            """)
     else:
-        st.warning("No price data available for gradient visualization")
+        st.warning("No price data available")
 
 # Footer
 if prices is not None and len(prices) > 0:
