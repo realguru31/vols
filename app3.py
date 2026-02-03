@@ -47,7 +47,6 @@ def get_yfinance_data_with_retry(ticker_symbol, max_retries=3):
 # Fetch Barchart data
 @st.cache_data(ttl=600)  # Increased cache time to 10 minutes
 def fetch_barchart_options(ticker_symbol, expiry_offset=0):
-def fetch_barchart_options(ticker_symbol, expiry_offset=0):
     try:
         # Get expiration dates from yfinance with retry logic
         expiry_dates, spot, error = get_yfinance_data_with_retry(ticker_symbol)
