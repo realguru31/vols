@@ -39,18 +39,26 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
         apiurl = 'https://www.barchart.com/proxies/core-api/v1/options/get'
         
         getheaders = {
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'accept-encoding': 'gzip, deflate, br',
+            'accept-language': 'en-US,en;q=0.9',
+            'cache-control': 'max-age=0',
+            'upgrade-insecure-requests': '1',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36'
         }
         
+        getpay = {'page': 'all'}
+        
         s = requests.Session()
-        r = s.get(geturl, headers=getheaders, timeout=10)
+        r = s.get(geturl, params=getpay, headers=getheaders, timeout=10)
         r.raise_for_status()
         
         headers = {
             'accept': 'application/json',
-            'referer': geturl,
-            'user-agent': 'Mozilla/5.0',
+            'accept-encoding': 'gzip, deflate, br',
+            'accept-language': 'en-US,en;q=0.9',
+            'referer': f'https://www.barchart.com/etfs-funds/quotes/{ticker_symbol}/volatility-greeks',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36',
             'x-xsrf-token': unquote(unquote(s.cookies.get_dict()['XSRF-TOKEN']))
         }
         
@@ -58,10 +66,11 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
             'baseSymbol': ticker_symbol,
             'groupBy': 'optionType',
             'expirationDate': expiry,
+            'meta': 'field.shortName,expirations,field.description',
             'orderBy': 'strikePrice',
             'orderDir': 'asc',
             'raw': '1',
-            'fields': 'strikePrice,openInterest,gamma,theta,optionType'
+            'fields': 'symbol,baseSymbol,strikePrice,lastPrice,volatility,delta,gamma,theta,vega,rho,volume,openInterest,optionType,daysToExpiration,expirationDate,tradeTime,averageVolatility,historicVolatility30d'
         }
         
         r = s.get(apiurl, params=payload, headers=headers, timeout=10)
@@ -130,11 +139,11 @@ st.markdown("## 📊 GEX Profile Analyzer")
 # Controls
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
 with col1:
-    TICKER = st.text_input("", "SPY", key="ticker").upper()
+    TICKER = st.text_input("Ticker", "SPY", key="ticker", label_visibility="collapsed").upper()
 with col2:
-    EXPIRY = st.number_input("", 0, 20, 1, key="expiry")
+    EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed")
 with col3:
-    RANGE_PCT = st.slider("", 5, 30, 15, key="range")
+    RANGE_PCT = st.slider("Range", 5, 30, 15, key="range", label_visibility="collapsed")
 with col4:
     if st.button("🔄"):
         st.cache_data.clear()
