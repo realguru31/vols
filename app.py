@@ -131,7 +131,7 @@ with col5:
     st.metric("IV", f"{fallback_iv:.1%}*" if fallback_iv else "Live")
 
 # OI Warning
-if oi_coverage < 10:
+if oi_coverage < 5:
     st.error("⚠️ **ZERO OPEN INTEREST DETECTED**")
     st.warning(f"""
     **Why:** Yahoo Finance doesn't update OI outside market hours for short-dated options.
