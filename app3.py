@@ -305,12 +305,16 @@ if prices is not None and len(prices) > 0:
         row_heights=[0.5, 0.5]
     )
     
-    # TOP: Total Gamma Heatmap - FIXED colorbar syntax
+    # TOP: Total Gamma Heatmap
+    # Normalize data for colorscale
+    max_gamma = np.max(grid_total) if np.max(grid_total) > 0 else 1
+    grid_total_normalized = grid_total / max_gamma
+    
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
             y=strike_grid,
-            z=grid_total,
+            z=grid_total_normalized,
             colorscale=[
                 [0, 'rgba(255, 0, 0, 0.1)'],
                 [0.3, 'rgba(255, 100, 0, 0.4)'],
@@ -323,7 +327,8 @@ if prices is not None and len(prices) > 0:
                     text="Gamma Density",
                     font=dict(color='white')
                 ),
-                tickfont=dict(color='white')
+                tickfont=dict(color='white'),
+                tickformat=".1%"
             ),
             hovertemplate="Time: %{x}<br>Strike: $%{y:.0f}<br>Gamma: %{z:,.0f}<extra></extra>",
             name="Gamma Exposure"
@@ -331,27 +336,35 @@ if prices is not None and len(prices) > 0:
         row=1, col=1
     )
     
-    # BOTTOM: Net GEX Heatmap - FIXED colorbar syntax
+    # BOTTOM: Net GEX Heatmap
+    # Normalize net GEX for colorscale (0-1 range)
+    max_abs_net = max(abs(np.min(grid_net)), abs(np.max(grid_net))) if grid_net.size > 0 else 1
+    if max_abs_net > 0:
+        grid_net_normalized = grid_net / (max_abs_net * 2) + 0.5  # Scale to 0-1 range
+    else:
+        grid_net_normalized = np.ones_like(grid_net) * 0.5
+    
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
             y=strike_grid,
-            z=grid_net,
+            z=grid_net_normalized,
             colorscale=[
-                [-1, 'rgba(0, 100, 255, 0.9)'],
-                [-0.3, 'rgba(100, 150, 255, 0.6)'],
-                [0, 'rgba(150, 150, 150, 0.3)'],
-                [0.3, 'rgba(255, 200, 100, 0.6)'],
-                [1, 'rgba(255, 215, 0, 0.9)']
+                [0, 'rgba(0, 100, 255, 0.9)'],      # Strong puts (blue)
+                [0.25, 'rgba(100, 150, 255, 0.6)'], # Moderate puts
+                [0.5, 'rgba(150, 150, 150, 0.3)'],  # Balanced
+                [0.75, 'rgba(255, 200, 100, 0.6)'], # Moderate calls
+                [1, 'rgba(255, 215, 0, 0.9)']       # Strong calls (gold)
             ],
-            zmid=0,
             showscale=True,
             colorbar=dict(
                 title=dict(
-                    text="Net GEX",
+                    text="Net GEX<br>← Puts | Calls →",
                     font=dict(color='white')
                 ),
-                tickfont=dict(color='white')
+                tickfont=dict(color='white'),
+                tickvals=[0, 0.25, 0.5, 0.75, 1],
+                ticktext=["Strong Puts", "Moderate Puts", "Balanced", "Moderate Calls", "Strong Calls"]
             ),
             hovertemplate="Time: %{x}<br>Strike: $%{y:.0f}<br>Net GEX: %{z:,.0f}<extra></extra>",
             name="Net GEX"
