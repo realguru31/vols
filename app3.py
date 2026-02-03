@@ -330,16 +330,18 @@ with col_right:
     st.markdown("#### Gamma & Charm Gradients")
     with st.expander("ℹ️ Gradient Logic", expanded=False):
         st.markdown("""
-        **TOP Chart (Gamma Density):**
-        - 🟢 **GREEN** = High GEX concentration (strong dealer gamma = resistance)
-        - 🟡 **YELLOW** = Medium GEX
-        - 🔴 **RED** = Low GEX (weak support/resistance)
+        **TOP Chart (Gamma Density) - Smooth Heat Map:**
+        - 🟢 **BRIGHT GREEN** = Highest GEX concentration (strong resistance)
+        - 🟡 **YELLOW-GREEN** = Medium-high gamma
+        - 🟠 **ORANGE** = Medium-low gamma  
+        - 🔴 **RED** = Lowest gamma (weak zones)
         
         **BOTTOM Chart (Call/Put Dominance):**
-        - 🟡 **YELLOW** = Call gamma > Put gamma (dealers short calls)
-        - 🔵 **BLUE** = Put gamma > Call gamma (dealers short puts)
+        - 🟡 **YELLOW** = Call gamma dominant (dealers short calls)
+        - 🔵 **BLUE** = Put gamma dominant (dealers short puts)
+        - Gray = Balanced
         
-        *Gradients span full trading day (9:30 AM - 4:00 PM ET)*
+        *Uses cubic interpolation for smooth transitions like VolSignals*
         """)
     
     if prices is not None and len(prices) > 0:
@@ -350,82 +352,109 @@ with col_right:
         put_gex_vals = gex_filt['put_gex'].values
         total_gex = gex_filt['total_gex'].values
         
-        # Normalize for color intensity
-        max_gex = total_gex.max()
-        if max_gex > 0:
-            gex_norm = total_gex / max_gex
-        else:
-            gex_norm = np.zeros(len(total_gex))
-        
         # CRITICAL FIX: Set explicit full trading day range (9:30 AM to 4:00 PM ET)
         today = pd.Timestamp.now(tz='America/New_York').normalize()
         market_open = today + timedelta(hours=9, minutes=30)
         market_close = today + timedelta(hours=16)
         
-        # Use the widest possible range - either price data or full market hours
+        # Use the widest possible range
         x_min = min(prices.index.min(), market_open) if not prices.empty else market_open
         x_max = max(prices.index.max(), market_close) if not prices.empty else market_close
         
-        # TOP CHART: Gamma gradient zones - Based on GEX density at each STRIKE
-        # Logic: High GEX concentration = HIGH GAMMA = GREEN (resistance)
-        #        Low GEX = RED (less dealer activity)
-        for i in range(len(strikes) - 1):
-            gex_at_strike = total_gex[i]
+        # CREATE SMOOTH GRADIENTS using fine interpolation
+        # Create a DENSE grid of y-values for smooth transitions (like VolSignals)
+        y_min = strikes.min()
+        y_max = strikes.max()
+        num_gradient_steps = 300  # Many thin bands = smooth gradient
+        y_grid = np.linspace(y_min, y_max, num_gradient_steps)
+        
+        # Interpolate GEX values to the fine grid for smooth transitions
+        if len(strikes) > 2:
+            # Interpolate total GEX
+            f_total = interp1d(strikes, total_gex, kind='cubic', fill_value='extrapolate', bounds_error=False)
+            total_gex_smooth = np.maximum(0, f_total(y_grid))
             
-            # Color based on GEX magnitude (like VolSignals)
-            if gex_at_strike > max_gex * 0.4:  # Top 40% = strong gamma
-                # GREEN = High gamma concentration (dealer resistance)
-                opacity = min(0.7, (gex_at_strike / max_gex) * 0.8)
+            # Interpolate call/put separately
+            f_call = interp1d(strikes, call_gex_vals, kind='cubic', fill_value='extrapolate', bounds_error=False)
+            f_put = interp1d(strikes, put_gex_vals, kind='cubic', fill_value='extrapolate', bounds_error=False)
+            call_gex_smooth = np.maximum(0, f_call(y_grid))
+            put_gex_smooth = np.maximum(0, f_put(y_grid))
+        else:
+            # Fallback for insufficient data
+            total_gex_smooth = np.zeros(num_gradient_steps)
+            call_gex_smooth = np.zeros(num_gradient_steps)
+            put_gex_smooth = np.zeros(num_gradient_steps)
+        
+        max_gex_smooth = total_gex_smooth.max() if total_gex_smooth.max() > 0 else 1
+        
+        # TOP CHART: SMOOTH Gamma gradient
+        for i in range(len(y_grid) - 1):
+            gex_value = total_gex_smooth[i]
+            normalized = gex_value / max_gex_smooth
+            
+            # Smooth color transition from RED (low) → YELLOW → GREEN (high)
+            if normalized > 0.6:
+                # High gamma = GREEN
+                opacity = min(0.7, normalized * 0.8)
                 color = f'rgba(0, 255, 0, {opacity})'
-            elif gex_at_strike > max_gex * 0.15:  # Middle tier
-                # Transitional yellow-green
+            elif normalized > 0.3:
+                # Medium = YELLOW/GREEN blend
+                opacity = 0.5
+                # Blend from yellow to green
+                green_component = int(255 * (normalized - 0.3) / 0.3)
+                color = f'rgba({255-green_component}, 255, 0, {opacity})'
+            elif normalized > 0.1:
+                # Low-medium = ORANGE
                 opacity = 0.4
-                color = f'rgba(200, 255, 0, {opacity})'
+                color = f'rgba(255, 150, 0, {opacity})'
             else:
-                # RED = Low gamma (less support/resistance)
+                # Very low = RED
                 opacity = 0.3
                 color = f'rgba(255, 0, 0, {opacity})'
             
-            # CRITICAL: Shapes must span FULL time range
             fig2.add_shape(
                 type="rect",
                 x0=x_min,
                 x1=x_max,
-                y0=strikes[i],
-                y1=strikes[i + 1],
+                y0=y_grid[i],
+                y1=y_grid[i + 1],
                 fillcolor=color,
                 layer='below',
                 line_width=0,
                 row=1, col=1
             )
         
-        # BOTTOM CHART: Call vs Put dominance zones
-        for i in range(len(strikes) - 1):
-            call_val = call_gex_vals[i] if i < len(call_gex_vals) else 0
-            put_val = put_gex_vals[i] if i < len(put_gex_vals) else 0
-            
+        # BOTTOM CHART: SMOOTH Call/Put dominance gradient
+        for i in range(len(y_grid) - 1):
+            call_val = call_gex_smooth[i]
+            put_val = put_gex_smooth[i]
             total = call_val + put_val
-            if total > 0:
-                if call_val > put_val:
-                    # YELLOW/GOLD = Call gamma dominant
-                    ratio = call_val / total
-                    opacity = min(0.6, ratio * 0.7)
-                    color = f'rgba(255, 215, 0, {opacity})'
-                else:
-                    # BLUE = Put gamma dominant
-                    ratio = put_val / total
-                    opacity = min(0.6, ratio * 0.7)
-                    color = f'rgba(74, 158, 255, {opacity})'
-            else:
-                color = 'rgba(100, 100, 100, 0.1)'
             
-            # Span full time range
+            if total > 0:
+                call_ratio = call_val / total
+                put_ratio = put_val / total
+                
+                if call_ratio > 0.55:
+                    # Call dominant = YELLOW/GOLD
+                    opacity = min(0.7, call_ratio * 0.8)
+                    color = f'rgba(255, 215, 0, {opacity})'
+                elif put_ratio > 0.55:
+                    # Put dominant = BLUE
+                    opacity = min(0.7, put_ratio * 0.8)
+                    color = f'rgba(74, 158, 255, {opacity})'
+                else:
+                    # Balanced = blend yellow/blue
+                    opacity = 0.3
+                    color = f'rgba(165, 186, 128, {opacity})'
+            else:
+                color = 'rgba(50, 50, 50, 0.1)'
+            
             fig2.add_shape(
                 type="rect",
                 x0=x_min,
                 x1=x_max,
-                y0=strikes[i],
-                y1=strikes[i + 1],
+                y0=y_grid[i],
+                y1=y_grid[i + 1],
                 fillcolor=color,
                 layer='below',
                 line_width=0,
