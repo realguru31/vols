@@ -7,7 +7,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-from scipy.interpolate import interp2d, griddata
+from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
 import time
 
@@ -149,8 +149,6 @@ def compute_gex(calls, puts):
         
         call_gex = 0
         put_gex = 0
-        call_charm = 0
-        put_charm = 0
         
         # Process calls
         call_data = calls[calls['strikePrice'] == K]
@@ -158,13 +156,9 @@ def compute_gex(calls, puts):
             row = call_data.iloc[0]
             oi = int(row['openInterest'])
             gamma = float(row['gamma'])
-            theta = float(row['theta'])
             
             if oi > 0 and gamma > 0:
                 call_gex = gamma * oi * 100
-                vega = float(row['vega']) if 'vega' in row and row['vega'] != 0 else 0.1
-                if vega != 0:
-                    call_charm = -theta/vega * gamma * oi * 100
         
         # Process puts
         put_data = puts[puts['strikePrice'] == K]
@@ -172,13 +166,9 @@ def compute_gex(calls, puts):
             row = put_data.iloc[0]
             oi = int(row['openInterest'])
             gamma = float(row['gamma'])
-            theta = float(row['theta'])
             
             if oi > 0 and gamma > 0:
                 put_gex = gamma * oi * 100
-                vega = float(row['vega']) if 'vega' in row and row['vega'] != 0 else 0.1
-                if vega != 0:
-                    put_charm = -theta/vega * gamma * oi * 100
         
         gex_data.append({
             'strike': K,
@@ -188,9 +178,6 @@ def compute_gex(calls, puts):
             'total_gex': call_gex + put_gex,
             'sell_gamma': -call_gex if call_gex > 0 else 0,
             'buy_gamma': put_gex if put_gex > 0 else 0,
-            'call_charm': call_charm,
-            'put_charm': put_charm,
-            'net_charm': call_charm + put_charm
         })
     
     return pd.DataFrame(gex_data)
@@ -258,7 +245,7 @@ with st.spinner("Fetching price data..."):
 # Show metrics
 st.caption(f"**{TICKER}** @ ${spot:.2f} | Expiry: {expiry}")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Strikes", len(gex_filt))
 with col2:
@@ -268,72 +255,45 @@ with col3:
 with col4:
     net = gex_filt['net_gex'].sum()
     st.metric("Net GEX", f"{net:,.0f}")
-with col5:
-    total_charm = gex_filt['net_charm'].sum()
-    st.metric("Net Charm", f"{total_charm:,.0f}")
 
 st.markdown("---")
 
-# NEW: Create smooth gradient heatmaps (like the examples you showed)
-st.markdown("#### 🌊 GEX & Charm Heatmaps (Professional Gradient View)")
+# Create smooth gradient heatmaps
+st.markdown("#### 🌊 GEX Heatmaps (Professional Gradient View)")
 
 if prices is not None and len(prices) > 0:
-    # Create a dense grid for smooth gradients
+    # Prepare data
     strikes = gex_filt['strike'].values
     total_gex = gex_filt['total_gex'].values
     net_gex = gex_filt['net_gex'].values
     
     # Create time grid from price data
-    time_values = prices.index.astype(np.int64) // 10**9  # Convert to seconds
+    time_values = prices.index.astype(np.int64) // 10**9
     time_grid = np.linspace(time_values.min(), time_values.max(), 100)
     
-    # Create strike grid (dense for smoothness)
+    # Create strike grid
     strike_grid = np.linspace(strikes.min(), strikes.max(), 100)
     
-    # Create 2D grid for interpolation
+    # Create 2D grid
     time_mesh, strike_mesh = np.meshgrid(time_grid, strike_grid)
     
-    # Prepare data for interpolation
-    points = []
-    values_total = []
-    values_net = []
+    # Prepare data for interpolation - simpler approach
+    grid_total = np.zeros((len(strike_grid), len(time_grid)))
+    grid_net = np.zeros((len(strike_grid), len(time_grid)))
     
-    # For each strike, create points along time dimension
+    # For each strike, spread the gamma value across time dimension
     for i, strike in enumerate(strikes):
-        for j in range(len(time_grid)):
-            points.append([time_grid[j], strike])
-            values_total.append(total_gex[i] if i < len(total_gex) else 0)
-            values_net.append(net_gex[i] if i < len(net_gex) else 0)
+        if i < len(total_gex):
+            # Find closest strike in grid
+            idx = np.argmin(np.abs(strike_grid - strike))
+            grid_total[idx, :] = total_gex[i]
+            grid_net[idx, :] = net_gex[i]
     
-    points = np.array(points)
-    values_total = np.array(values_total)
-    values_net = np.array(values_net)
+    # Apply Gaussian smoothing for smooth gradients
+    grid_total = gaussian_filter(grid_total, sigma=2)
+    grid_net = gaussian_filter(grid_net, sigma=2)
     
-    # Interpolate onto grid for smooth heatmap
-    if len(points) > 3:
-        try:
-            # Use griddata for 2D interpolation
-            grid_total = griddata(points, values_total, (time_mesh, strike_mesh), method='cubic', fill_value=0)
-            grid_net = griddata(points, values_net, (time_mesh, strike_mesh), method='cubic', fill_value=0)
-            
-            # Apply Gaussian smoothing for extra smoothness
-            grid_total = gaussian_filter(grid_total, sigma=1.5)
-            grid_net = gaussian_filter(grid_net, sigma=1.5)
-        except:
-            # Fallback to linear interpolation
-            grid_total = griddata(points, values_total, (time_mesh, strike_mesh), method='linear', fill_value=0)
-            grid_net = griddata(points, values_net, (time_mesh, strike_mesh), method='linear', fill_value=0)
-    else:
-        # Create simple grid if not enough data
-        grid_total = np.zeros((len(strike_grid), len(time_grid)))
-        grid_net = np.zeros((len(strike_grid), len(time_grid)))
-        for i, strike in enumerate(strikes):
-            if i < len(total_gex):
-                idx = np.argmin(np.abs(strike_grid - strike))
-                grid_total[idx, :] = total_gex[i]
-                grid_net[idx, :] = net_gex[i]
-    
-    # Convert time grid back to datetime for display
+    # Convert time grid back to datetime
     time_dates = pd.to_datetime(time_grid, unit='s')
     
     # Create the professional gradient chart
@@ -345,22 +305,21 @@ if prices is not None and len(prices) > 0:
         row_heights=[0.5, 0.5]
     )
     
-    # TOP: Total Gamma Heatmap (like your first example image)
+    # TOP: Total Gamma Heatmap
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
             y=strike_grid,
             z=grid_total,
             colorscale=[
-                [0, 'rgba(255, 0, 0, 0.1)'],      # Low - transparent red
-                [0.3, 'rgba(255, 100, 0, 0.4)'],  # Medium-low - orange
-                [0.6, 'rgba(255, 255, 0, 0.7)'],  # Medium - yellow
-                [1, 'rgba(0, 255, 0, 0.9)']       # High - green
+                [0, 'rgba(255, 0, 0, 0.1)'],
+                [0.3, 'rgba(255, 100, 0, 0.4)'],
+                [0.6, 'rgba(255, 255, 0, 0.7)'],
+                [1, 'rgba(0, 255, 0, 0.9)']
             ],
             showscale=True,
             colorbar=dict(
-                title="Gamma<br>Density",
-                titleside="right",
+                title="Gamma Density",
                 titlefont=dict(color='white'),
                 tickfont=dict(color='white')
             ),
@@ -370,24 +329,23 @@ if prices is not None and len(prices) > 0:
         row=1, col=1
     )
     
-    # BOTTOM: Net GEX Heatmap (showing call/put dominance)
+    # BOTTOM: Net GEX Heatmap
     fig.add_trace(
         go.Heatmap(
             x=time_dates,
             y=strike_grid,
             z=grid_net,
             colorscale=[
-                [-1, 'rgba(0, 100, 255, 0.9)'],    # Strong put dominance - blue
-                [-0.3, 'rgba(100, 150, 255, 0.6)'], # Moderate put - light blue
-                [0, 'rgba(150, 150, 150, 0.3)'],   # Balanced - gray
-                [0.3, 'rgba(255, 200, 100, 0.6)'], # Moderate call - orange
-                [1, 'rgba(255, 215, 0, 0.9)']      # Strong call dominance - gold
+                [-1, 'rgba(0, 100, 255, 0.9)'],
+                [-0.3, 'rgba(100, 150, 255, 0.6)'],
+                [0, 'rgba(150, 150, 150, 0.3)'],
+                [0.3, 'rgba(255, 200, 100, 0.6)'],
+                [1, 'rgba(255, 215, 0, 0.9)']
             ],
-            zmid=0,  # Center the colorscale at 0
+            zmid=0,
             showscale=True,
             colorbar=dict(
-                title="Net GEX<br>Call/Put",
-                titleside="right",
+                title="Net GEX",
                 titlefont=dict(color='white'),
                 tickfont=dict(color='white')
             ),
@@ -397,7 +355,7 @@ if prices is not None and len(prices) > 0:
         row=2, col=1
     )
     
-    # Add price candlesticks on top of heatmaps (semi-transparent)
+    # Add price candlesticks
     for row in [1, 2]:
         fig.add_trace(
             go.Candlestick(
@@ -425,7 +383,7 @@ if prices is not None and len(prices) > 0:
             row=row, col=1
         )
     
-    # Update layout for professional look
+    # Update layout
     fig.update_layout(
         height=900,
         plot_bgcolor='#0a0e27',
@@ -434,13 +392,7 @@ if prices is not None and len(prices) > 0:
         showlegend=False,
         xaxis_rangeslider_visible=False,
         margin=dict(l=10, r=10, t=50, b=10),
-        hovermode='x unified',
-        title=dict(
-            text=f"{TICKER} GEX Analysis - {expiry}",
-            font=dict(size=16, color='white'),
-            x=0.5,
-            xanchor='center'
-        )
+        hovermode='x unified'
     )
     
     # Update axes
@@ -460,37 +412,36 @@ if prices is not None and len(prices) > 0:
             row=row, col=1
         )
     
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+    st.plotly_chart(fig, use_container_width=True)
     
     # Add explanation
     with st.expander("📊 Chart Interpretation Guide", expanded=True):
         st.markdown("""
         ### Gamma Exposure Heatmap (Top Chart)
-        - **🟢 Bright Green Areas**: High gamma concentration (dealers have large gamma exposure)
+        - **🟢 Bright Green Areas**: High gamma concentration
         - **🟡 Yellow Areas**: Medium gamma exposure
-        - **🔴 Red Areas**: Low gamma exposure (weak support/resistance)
+        - **🔴 Red Areas**: Low gamma exposure
         
         ### Net GEX Heatmap (Bottom Chart)  
-        - **🟡 Gold/Yellow Areas**: Call gamma dominant (dealers short calls - resistance)
-        - **🔵 Blue Areas**: Put gamma dominant (dealers short puts - support)
+        - **🟡 Gold/Yellow Areas**: Call gamma dominant (resistance)
+        - **🔵 Blue Areas**: Put gamma dominant (support)
         - **⚪ Gray Areas**: Balanced gamma
         
         ### How to Use This:
-        1. **Support/Resistance**: Look for dense green areas (high gamma) at specific strikes
-        2. **Gamma Walls**: Vertical green/yellow bands indicate strong gamma concentrations
-        3. **Price Magnet Areas**: Where gamma exposure is highest often acts as price magnets
-        4. **Gamma Flip Zones**: Areas where colors change rapidly indicate potential reversal points
+        1. **Support/Resistance**: Dense green areas indicate strong gamma
+        2. **Gamma Walls**: Vertical bands show concentrated gamma
+        3. **Price Magnet Areas**: High gamma areas often act as price magnets
         """)
     
 else:
     st.warning("No intraday price data available for heatmap visualization.")
     
-    # Fallback: Show 1D gradient view
-    st.markdown("#### 📊 Gamma Distribution (1D View)")
+    # Simple 1D view
+    st.markdown("#### 📊 Gamma Distribution")
     
     fig_fallback = go.Figure()
     
-    # Add area plot for smooth gradient effect
+    # Add smooth area plot
     fig_fallback.add_trace(go.Scatter(
         x=gex_filt['strike'],
         y=gex_filt['total_gex'],
@@ -498,11 +449,9 @@ else:
         mode='lines',
         line=dict(width=0),
         fillcolor='rgba(0, 255, 0, 0.3)',
-        name='Total Gamma',
-        showlegend=False
+        name='Total Gamma'
     ))
     
-    # Add line for total gamma
     fig_fallback.add_trace(go.Scatter(
         x=gex_filt['strike'],
         y=gex_filt['total_gex'],
@@ -511,7 +460,6 @@ else:
         name='Total Gamma'
     ))
     
-    # Add line for net gamma
     fig_fallback.add_trace(go.Scatter(
         x=gex_filt['strike'],
         y=gex_filt['net_gex'],
@@ -520,12 +468,10 @@ else:
         name='Net GEX'
     ))
     
-    # Add spot line
     fig_fallback.add_vline(
         x=spot,
         line=dict(color='white', width=2, dash='dash'),
-        annotation_text=f'Spot: ${spot:.2f}',
-        annotation_position="top right"
+        annotation_text=f'Spot: ${spot:.2f}'
     )
     
     fig_fallback.update_layout(
@@ -542,39 +488,33 @@ else:
             gridcolor='rgba(255,255,255,0.1)',
             tickformat=',',
             title='Gamma Exposure'
-        ),
-        margin=dict(l=10, r=10, t=10, b=10)
+        )
     )
     
     st.plotly_chart(fig_fallback, use_container_width=True)
 
 # Original bar chart view
 st.markdown("---")
-st.markdown("#### 📊 Positions by Strike (Traditional View)")
+st.markdown("#### 📊 Positions by Strike")
 
 fig_bars = go.Figure()
 
-# Blue bars (puts) pointing RIGHT
 fig_bars.add_trace(go.Bar(
     y=gex_filt['strike'],
     x=gex_filt['put_gex'],
     orientation='h',
     marker=dict(color='#4A9EFF'),
-    name='Put',
-    hovertemplate='$%{y:.0f}<br>%{x:,.0f}<extra></extra>'
+    name='Put'
 ))
 
-# Orange bars (calls) pointing LEFT
 fig_bars.add_trace(go.Bar(
     y=gex_filt['strike'],
     x=-gex_filt['call_gex'],
     orientation='h',
     marker=dict(color='#FFB84D'),
-    name='Call',
-    hovertemplate='$%{y:.0f}<br>%{x:,.0f}<extra></extra>'
+    name='Call'
 ))
 
-# Yellow spot line
 fig_bars.add_hline(y=spot, line=dict(color='#FFD700', width=3))
 
 fig_bars.update_layout(
@@ -582,11 +522,10 @@ fig_bars.update_layout(
     height=400,
     plot_bgcolor='#0a0e27',
     paper_bgcolor='#0a0e27',
-    font=dict(color='#fff', size=10),
+    font=dict(color='white', size=10),
     xaxis=dict(gridcolor='#1a1f3a', tickformat=','),
     yaxis=dict(gridcolor='#1a1f3a', tickformat='$.0f'),
-    showlegend=False,
-    margin=dict(l=10, r=10, t=10, b=10)
+    showlegend=False
 )
 
 st.plotly_chart(fig_bars, use_container_width=True)
@@ -595,6 +534,6 @@ st.plotly_chart(fig_bars, use_container_width=True)
 st.markdown("---")
 if prices is not None and len(prices) > 0:
     time_range = f"{prices.index.min().strftime('%H:%M')} - {prices.index.max().strftime('%H:%M')}"
-    st.caption(f"Data: Barchart + YFinance | Price Range: {time_range} | Updated: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Data: Barchart + YFinance | {time_range} | {datetime.now().strftime('%H:%M:%S')}")
 else:
-    st.caption(f"Data: Barchart + YFinance | Updated: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Data: Barchart + YFinance | {datetime.now().strftime('%H:%M:%S')}")
