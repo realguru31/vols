@@ -6,4 +6,3 @@ plotly
 scipy
 tvdatafeed
 requests
-tvdatafeed
