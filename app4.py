@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from urllib.parse import unquote
 from datetime import datetime, timedelta
-import yfinance as yf
+from tvDatafeed import TvDatafeed, Interval
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
@@ -24,39 +24,110 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper function to get yfinance data with retry
-def get_yfinance_data_with_retry(ticker_symbol, max_retries=3):
-    """Get yfinance data with exponential backoff retry"""
+# Initialize TradingView datafeed
+@st.cache_resource
+def get_tv_datafeed():
+    """Initialize TradingView datafeed (cached to avoid reconnecting)"""
+    return TvDatafeed()
+
+# Calculate options expiration dates
+def get_options_expirations(num_expirations=20):
+    """Calculate standard monthly options expirations (3rd Friday of month)"""
+    expirations = []
+    current_date = datetime.now()
+    
+    for month_offset in range(num_expirations):
+        # Get first day of target month
+        if month_offset == 0:
+            year = current_date.year
+            month = current_date.month
+        else:
+            year = current_date.year + (current_date.month + month_offset - 1) // 12
+            month = (current_date.month + month_offset - 1) % 12 + 1
+        
+        # Find 3rd Friday
+        first_day = datetime(year, month, 1)
+        first_friday = first_day + timedelta(days=(4 - first_day.weekday()) % 7)
+        third_friday = first_friday + timedelta(weeks=2)
+        
+        # Only include future dates
+        if third_friday >= current_date:
+            expirations.append(third_friday.strftime("%Y-%m-%d"))
+    
+    return expirations
+
+# Helper function to get spot price from TradingView
+def get_tv_spot_price(tv, symbol="SPY"):
+    """Get current spot price from TradingView"""
+    try:
+        df = tv.get_hist(symbol=symbol, exchange='NASDAQ', interval=Interval.in_1_minute, n_bars=1)
+        if df is not None and not df.empty:
+            return df['close'].iloc[-1]
+        return None
+    except:
+        return None
+
+# Helper function to get candlestick data
+def get_tv_prices(tv, symbol="SPY", interval=Interval.in_5_minute, n_bars=100):
+    """Get historical price data from TradingView"""
+    try:
+        df = tv.get_hist(symbol=symbol, exchange='NASDAQ', interval=interval, n_bars=n_bars)
+        if df is not None and not df.empty:
+            # Rename columns to match yfinance format
+            df = df.rename(columns={
+                'open': 'Open',
+                'high': 'High', 
+                'low': 'Low',
+                'close': 'Close',
+                'volume': 'Volume'
+            })
+            return df
+        return None
+    except:
+        return None
+
+# Helper function to get data with retry (for TradingView)
+def get_tv_data_with_retry(tv, ticker_symbol, max_retries=3):
+    """Get TradingView data with retry logic"""
     for attempt in range(max_retries):
         try:
-            ticker_yf = yf.Ticker(ticker_symbol)
-            expiry_dates = ticker_yf.options
-            spot = ticker_yf.history(period="1d")['Close'].iloc[-1]
-            return expiry_dates, spot, None
-        except Exception as e:
-            if "Rate limit" in str(e) or "Too Many Requests" in str(e):
+            # Get spot price
+            spot = get_tv_spot_price(tv, ticker_symbol)
+            if spot is None:
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 2  # 2, 4, 8 seconds
-                    time.sleep(wait_time)
+                    time.sleep(1)
                     continue
-                else:
-                    return None, None, f"Yahoo Finance rate limit exceeded. Please wait a few minutes and try again."
+                return None, None, "Failed to fetch spot price from TradingView"
+            
+            # Get expiration dates (calculated)
+            expiry_dates = get_options_expirations()
+            
+            return expiry_dates, spot, None
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
             else:
-                return None, None, f"YFinance error: {str(e)}"
+                return None, None, f"TradingView error: {str(e)}"
+    
     return None, None, "Failed after retries"
 
 # Fetch Barchart data
 @st.cache_data(ttl=600)  # Increased cache time to 10 minutes
 def fetch_barchart_options(ticker_symbol, expiry_offset=0):
     try:
-        # Get expiration dates from yfinance with retry logic
-        expiry_dates, spot, error = get_yfinance_data_with_retry(ticker_symbol)
+        # Initialize TradingView
+        tv = get_tv_datafeed()
+        
+        # Get expiration dates and spot from TradingView (NO RATE LIMITS!)
+        expiry_dates, spot, error = get_tv_data_with_retry(tv, ticker_symbol)
         
         if error:
-            return {'error': error, 'type': 'YFinanceRateLimitError', 'traceback': 'Yahoo Finance is rate limiting requests. Wait 2-5 minutes and refresh.'}
+            return {'error': error, 'type': 'TradingViewError', 'traceback': error}
         
         if not expiry_dates:
-            return {'error': f'No expiration dates found for {ticker_symbol}', 'type': 'NoOptionsError', 'traceback': 'Ticker has no options data available'}
+            return {'error': f'No expiration dates calculated for {ticker_symbol}', 'type': 'NoOptionsError', 'traceback': 'Failed to generate expiration dates'}
         
         if expiry_offset >= len(expiry_dates):
             return {'error': f'Expiry offset {expiry_offset} too high, only {len(expiry_dates)} dates available', 'type': 'OffsetError', 'traceback': f'Available dates: {expiry_dates[:5]}'}
@@ -176,20 +247,22 @@ def compute_gex(calls, puts):
 # Title
 st.markdown("## 📊 GEX Profile Analyzer")
 
-# Rate limit warning
-st.info("⚠️ **Note:** If you see rate limit errors, wait 2-5 minutes before refreshing. Yahoo Finance limits requests from cloud IPs.")
+# Info banner
+st.info("✅ **Using TradingView data** - No rate limits! Expiration dates are calculated (3rd Friday of each month)")
 
 # Controls
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
 with col1:
     TICKER = st.text_input("Ticker", "SPY", key="ticker", label_visibility="collapsed").upper()
 with col2:
-    EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed")
+    EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed", 
+                             help="0=Current month, 1=Next month, etc. Calculated as 3rd Friday")
 with col3:
-    RANGE_PCT = st.slider("Range", 2, 4, 6, key="range", label_visibility="collapsed")
+    RANGE_PCT = st.slider("Range", 5, 30, 15, key="range", label_visibility="collapsed")
 with col4:
     if st.button("🔄"):
         st.cache_data.clear()
+        st.cache_resource.clear()
         st.rerun()
 
 # Fetch data
@@ -201,22 +274,9 @@ if not result:
     st.stop()
 
 if 'error' in result:
-    if 'rate limit' in result['error'].lower():
-        st.error("🚫 Yahoo Finance Rate Limit Reached")
-        st.warning("""
-        **What happened?** Yahoo Finance is limiting requests from Streamlit Cloud.
-        
-        **Solutions:**
-        1. ⏰ Wait 2-5 minutes and click the refresh button (🔄)
-        2. 🔄 Clear your browser cache and reload
-        3. 💻 Run this app locally (no rate limits on your own IP)
-        
-        **Why does this happen?** Streamlit Cloud shares IP addresses, so Yahoo sees many requests from the same source.
-        """)
-    else:
-        st.error(f"❌ Failed to fetch data")
-        st.error(f"**Error Type:** {result['type']}")
-        st.error(f"**Error Message:** {result['error']}")
+    st.error("❌ Failed to fetch data")
+    st.error(f"**Error Type:** {result['type']}")
+    st.error(f"**Error Message:** {result['error']}")
     
     with st.expander("🔍 Technical Details"):
         st.code(result['traceback'])
@@ -238,26 +298,29 @@ if len(gex_filt) == 0:
     st.warning("No data")
     st.stop()
 
-# Get price data - fetch more historical data for full day view
+# Get price data - USE TRADINGVIEW INSTEAD OF YFINANCE
 @st.cache_data(ttl=300)
 def get_prices(ticker):
     try:
-        # Fetch 2 days of 5-min data to ensure we have full current day
-        hist = yf.Ticker(ticker).history(period="2d", interval="5m")
+        tv = get_tv_datafeed()
         
-        if hist.empty:
+        # Fetch full day of 5-minute data (~78 bars for full trading day)
+        hist = get_tv_prices(tv, symbol=ticker, interval=Interval.in_5_minute, n_bars=100)
+        
+        if hist is None or hist.empty:
             return None
         
         # Filter to today's data only
         today = pd.Timestamp.now().normalize()
         hist_today = hist[hist.index.date >= today.date()]
         
-        # If today's data is empty, use last available day
+        # If today's data is empty, use what we have
         if hist_today.empty:
             return hist
         
         return hist_today if not hist_today.empty else hist
-    except:
+    except Exception as e:
+        st.error(f"TradingView error: {str(e)}")
         return None
 
 prices = get_prices(TICKER)
@@ -520,6 +583,6 @@ with col_right:
 # Footer
 if prices is not None and len(prices) > 0:
     time_range = f"{prices.index.min().strftime('%H:%M')} - {prices.index.max().strftime('%H:%M')}"
-    st.caption(f"Data: Barchart + YFinance | Price Range: {time_range} | Updated: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Data: Barchart (Options) + TradingView (Price) | Range: {time_range} | Updated: {datetime.now().strftime('%H:%M:%S')}")
 else:
-    st.caption(f"Data: Barchart + YFinance | Updated: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Data: Barchart (Options) + TradingView (Price) | Updated: {datetime.now().strftime('%H:%M:%S')}")
