@@ -6,3 +6,7 @@ plotly
 scipy
 tvdatafeed
 requests
+pandas
+streamlit-extras
+st-pages
+pymongo
