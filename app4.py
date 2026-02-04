@@ -263,7 +263,7 @@ with col2:
     EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed", 
                              help="0=Current month, 1=Next month, etc. Calculated as 3rd Friday")
 with col3:
-    RANGE_PCT = st.slider("Range", 5, 30, 15, key="range", label_visibility="collapsed")
+    RANGE_PCT = st.slider("Range", 2, 5, 3, key="range", label_visibility="collapsed")
 with col4:
     if st.button("🔄"):
         st.cache_data.clear()
@@ -395,38 +395,18 @@ with col_left:
     st.plotly_chart(fig1, width='stretch')
 
 with col_right:
-    st.markdown("#### GEX Zones + Price Action")
-    st.caption(f"Drawing {len(gex_filt)-1} colored zones based on GEX intensity")
+    st.markdown("#### GEX Profile + Price Action")
+    st.caption(f"GEX curves overlaid on price chart (strikes: {len(gex_filt)})")
     
     if prices is not None and len(prices) > 0:
-        fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                             specs=[[{"secondary_y": False}], [{"secondary_y": False}]])
+        fig2 = make_subplots(rows=2, cols=1, shared_xaxes=False, vertical_spacing=0.05)
         
         strikes = gex_filt['strike'].values
         call_gex_vals = gex_filt['call_gex'].values
         put_gex_vals = gex_filt['put_gex'].values
         total_gex = gex_filt['total_gex'].values
         
-        # Full trading day range (tz-naive to match TradingView data)
-        today = pd.Timestamp.now().normalize()  # No timezone
-        market_open = today + timedelta(hours=9, minutes=30)
-        market_close = today + timedelta(hours=16)
-        
-        # Safe comparison handling both tz-naive and tz-aware
-        if not prices.empty:
-            if prices.index.tz is not None:
-                # Price data has timezone, remove it for comparison
-                x_min = min(prices.index.min().tz_localize(None), market_open)
-                x_max = max(prices.index.max().tz_localize(None), market_close)
-            else:
-                # Both tz-naive, direct comparison works
-                x_min = min(prices.index.min(), market_open)
-                x_max = max(prices.index.max(), market_close)
-        else:
-            x_min = market_open
-            x_max = market_close
-        
-        # Smooth GEX using Gaussian filter
+        # Smooth GEX curves using Gaussian filter (like matplotlib version)
         if len(strikes) > 3:
             total_gex_smooth = gaussian_filter1d(total_gex, sigma=1.5)
             call_gex_smooth = gaussian_filter1d(call_gex_vals, sigma=1.5)
@@ -436,44 +416,18 @@ with col_right:
             call_gex_smooth = call_gex_vals
             put_gex_smooth = put_gex_vals
         
-        max_gex = total_gex_smooth.max() if total_gex_smooth.max() > 0 else 1
+        # Get max GEX for scaling
+        max_gex = max(total_gex_smooth.max(), call_gex_smooth.max(), put_gex_smooth.max())
+        if max_gex == 0:
+            max_gex = 1
         
-        # TEST: Add one very obvious zone to verify hrect works
-        mid_strike = strikes[len(strikes)//2]
-        fig2.add_hrect(
-            y0=mid_strike - 2,
-            y1=mid_strike + 2,
-            fillcolor='rgba(255, 0, 255, 0.5)',  # Bright magenta test zone
-            layer='below',
-            line_width=0,
-            annotation_text="TEST ZONE",
-            row=1, col=1
-        )
+        # Calculate time range for GEX scaling
+        time_min = prices.index.min()
+        time_max = prices.index.max()
+        time_range = time_max - time_min
         
-        # TOP CHART: GEX-colored background zones + candlesticks
-        # Create filled areas based on GEX intensity
-        for i in range(len(strikes) - 1):
-            intensity = total_gex_smooth[i] / max_gex
-            
-            # Color by GEX intensity - MUCH MORE VISIBLE
-            if intensity > 0.6:
-                color = 'rgba(0, 255, 0, 0.4)'  # Green - high GEX (was 0.15)
-            elif intensity > 0.3:
-                color = 'rgba(255, 215, 0, 0.35)'  # Yellow - medium (was 0.12)
-            else:
-                color = 'rgba(255, 0, 0, 0.3)'  # Red - low GEX (was 0.1)
-            
-            # Add colored horizontal zone
-            fig2.add_hrect(
-                y0=strikes[i],
-                y1=strikes[i+1],
-                fillcolor=color,
-                layer='below',
-                line_width=0,
-                row=1, col=1
-            )
-        
-        # Add candlesticks on top
+        # TOP CHART: Total GEX Profile + Candlesticks
+        # Add candlesticks first
         fig2.add_trace(
             go.Candlestick(
                 x=prices.index,
@@ -483,31 +437,80 @@ with col_right:
                 close=prices['Close'],
                 increasing_line_color='#00FF00',
                 decreasing_line_color='#FF0000',
-                increasing_fillcolor='rgba(0,255,0,0.2)',  # More transparent candles
-                decreasing_fillcolor='rgba(255,0,0,0.2)',
+                increasing_fillcolor='rgba(0,255,0,0.3)',
+                decreasing_fillcolor='rgba(255,0,0,0.3)',
                 line=dict(width=1),
+                name='Price',
                 showlegend=False
             ),
             row=1, col=1
         )
         
-        # BOTTOM CHART: Call/Put dominance zones + candlesticks
-        for i in range(len(strikes) - 1):
-            if call_gex_smooth[i] > put_gex_smooth[i]:
-                color = 'rgba(255, 215, 0, 0.4)'  # Yellow - call heavy (was 0.15)
-            else:
-                color = 'rgba(74, 158, 255, 0.4)'  # Blue - put heavy (was 0.15)
-            
-            fig2.add_hrect(
-                y0=strikes[i],
-                y1=strikes[i+1],
-                fillcolor=color,
-                layer='below',
-                line_width=0,
-                row=2, col=1
-            )
+        # Add GEX curves as VERTICAL profiles (rotated 90 degrees)
+        # Scale GEX to fit on right 20% of chart
+        gex_x_offset = time_max + time_range * 0.05  # Start 5% after last candle
+        gex_x_scale = (time_range * 0.2) / max_gex  # Scale to fit in 20% of time range
         
-        # Add candlesticks
+        # Total GEX (orange curve) - VISIBLE with thick line and fill
+        gex_x_total = [gex_x_offset + (val * gex_x_scale) for val in total_gex_smooth]
+        fig2.add_trace(
+            go.Scatter(
+                x=gex_x_total,
+                y=strikes,
+                mode='lines',
+                line=dict(color='orange', width=4),  # Thicker
+                name='Total GEX',
+                fill='tozerox',
+                fillcolor='rgba(255, 165, 0, 0.4)',  # More opaque
+                hovertemplate='Strike: %{y:.0f}<br>GEX: %{customdata:,.0f}<extra></extra>',
+                customdata=total_gex_smooth,
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Call GEX (green curve)
+        gex_x_calls = [gex_x_offset + (val * gex_x_scale) for val in call_gex_smooth]
+        fig2.add_trace(
+            go.Scatter(
+                x=gex_x_calls,
+                y=strikes,
+                mode='lines',
+                line=dict(color='green', width=3),
+                name='Call GEX',
+                hovertemplate='Strike: %{y:.0f}<br>Call GEX: %{customdata:,.0f}<extra></extra>',
+                customdata=call_gex_smooth,
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Put GEX (red curve)
+        gex_x_puts = [gex_x_offset + (val * gex_x_scale) for val in put_gex_smooth]
+        fig2.add_trace(
+            go.Scatter(
+                x=gex_x_puts,
+                y=strikes,
+                mode='lines',
+                line=dict(color='red', width=3),
+                name='Put GEX',
+                hovertemplate='Strike: %{y:.0f}<br>Put GEX: %{customdata:,.0f}<extra></extra>',
+                customdata=put_gex_smooth,
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Spot price line
+        fig2.add_hline(
+            y=spot,
+            line=dict(color='#FFD700', width=2, dash='dot'),
+            annotation_text=f"${spot:.2f}",
+            annotation_position="right",
+            row=1, col=1
+        )
+        
+        # BOTTOM CHART: Net GEX Profile + Candlesticks
         fig2.add_trace(
             go.Candlestick(
                 x=prices.index,
@@ -517,47 +520,48 @@ with col_right:
                 close=prices['Close'],
                 increasing_line_color='#00FF00',
                 decreasing_line_color='#FF0000',
-                increasing_fillcolor='rgba(0,255,0,0.2)',
-                decreasing_fillcolor='rgba(255,0,0,0.2)',
+                increasing_fillcolor='rgba(0,255,0,0.3)',
+                decreasing_fillcolor='rgba(255,0,0,0.3)',
                 line=dict(width=1),
+                name='Price',
                 showlegend=False
             ),
             row=2, col=1
         )
         
-        # Add spot lines to both charts
-        for row in [1, 2]:
-            fig2.add_hline(
-                y=spot,
-                line=dict(color='#FFD700', width=2, dash='dot'),
-                row=row, col=1
-            )
+        # Net GEX (call - put) - GOLD curve
+        net_gex_smooth = call_gex_smooth - put_gex_smooth
+        max_net = max(abs(net_gex_smooth.min()), abs(net_gex_smooth.max()))
+        if max_net == 0:
+            max_net = 1
         
-        # Add candlesticks AFTER gradients (on top)
-        for row in [1, 2]:
-            fig2.add_trace(
-                go.Candlestick(
-                    x=prices.index,
-                    open=prices['Open'],
-                    high=prices['High'],
-                    low=prices['Low'],
-                    close=prices['Close'],
-                    increasing_line_color='#00FF00',
-                    decreasing_line_color='#FF0000',
-                    increasing_fillcolor='rgba(0,255,0,0.3)',
-                    decreasing_fillcolor='rgba(255,0,0,0.3)',
-                    line=dict(width=1),
-                    showlegend=False
-                ),
-                row=row, col=1
-            )
-            
-            # Spot line
-            fig2.add_hline(
-                y=spot, 
-                line=dict(color='#FFD700', width=2, dash='dot'),
-                row=row, col=1
-            )
+        net_gex_x_scale = (time_range * 0.2) / max_net
+        gex_x_net = [gex_x_offset + (val * net_gex_x_scale) for val in net_gex_smooth]
+        
+        fig2.add_trace(
+            go.Scatter(
+                x=gex_x_net,
+                y=strikes,
+                mode='lines',
+                line=dict(color='gold', width=4),
+                name='Net GEX',
+                fill='tozerox',
+                fillcolor='rgba(255, 215, 0, 0.4)',
+                hovertemplate='Strike: %{y:.0f}<br>Net GEX: %{customdata:,.0f}<extra></extra>',
+                customdata=net_gex_smooth,
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+        
+        # Spot line
+        fig2.add_hline(
+            y=spot,
+            line=dict(color='#FFD700', width=2, dash='dot'),
+            annotation_text=f"${spot:.2f}",
+            annotation_position="right",
+            row=2, col=1
+        )
         
         fig2.update_layout(
             height=850,
@@ -567,31 +571,34 @@ with col_right:
             showlegend=False,
             xaxis_rangeslider_visible=False,
             margin=dict(l=10, r=10, t=10, b=10),
-            hovermode='x unified'
+            hovermode='closest'
         )
         
-        # Important: Set ranges to show full day
+        # Set X-axis to show EXTENDED range (includes GEX curves)
+        x_range_extended = time_max + time_range * 0.3  # Extend 30% to show GEX curves
         fig2.update_xaxes(
             gridcolor='#1a1f3a',
             showgrid=True,
-            range=[x_min, x_max],  # Show full time range
-            fixedrange=False  # Allow zooming but start zoomed out
+            range=[time_min, x_range_extended],  # Extended range
+            fixedrange=False
         )
         
-        # Apply to both y-axes
+        # Set Y-axis ranges
+        y_padding = (strikes.max() - strikes.min()) * 0.1
         fig2.update_yaxes(
             gridcolor='#1a1f3a',
             tickformat='$.0f',
-            range=[strikes.min() - 5, strikes.max() + 5],
+            range=[strikes.min() - y_padding, strikes.max() + y_padding],
             row=1, col=1
         )
         fig2.update_yaxes(
             gridcolor='#1a1f3a',
             tickformat='$.0f',
-            range=[strikes.min() - 5, strikes.max() + 5],
+            range=[strikes.min() - y_padding, strikes.max() + y_padding],
             row=2, col=1
         )
         
+        st.plotly_chart(fig2, width='stretch')
         st.plotly_chart(fig2, width='stretch')
     else:
         st.warning("No price data available")
