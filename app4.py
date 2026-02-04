@@ -329,6 +329,7 @@ with col_left:
 
 with col_right:
     st.markdown("#### GEX Zones + Price Action")
+    st.caption(f"Drawing {len(gex_filt)-1} colored zones based on GEX intensity")
     
     if prices is not None and len(prices) > 0:
         fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05,
@@ -358,18 +359,30 @@ with col_right:
         
         max_gex = total_gex_smooth.max() if total_gex_smooth.max() > 0 else 1
         
+        # TEST: Add one very obvious zone to verify hrect works
+        mid_strike = strikes[len(strikes)//2]
+        fig2.add_hrect(
+            y0=mid_strike - 2,
+            y1=mid_strike + 2,
+            fillcolor='rgba(255, 0, 255, 0.5)',  # Bright magenta test zone
+            layer='below',
+            line_width=0,
+            annotation_text="TEST ZONE",
+            row=1, col=1
+        )
+        
         # TOP CHART: GEX-colored background zones + candlesticks
         # Create filled areas based on GEX intensity
         for i in range(len(strikes) - 1):
             intensity = total_gex_smooth[i] / max_gex
             
-            # Color by GEX intensity
+            # Color by GEX intensity - MUCH MORE VISIBLE
             if intensity > 0.6:
-                color = 'rgba(0, 255, 0, 0.15)'  # Green - high GEX
+                color = 'rgba(0, 255, 0, 0.4)'  # Green - high GEX (was 0.15)
             elif intensity > 0.3:
-                color = 'rgba(255, 215, 0, 0.12)'  # Yellow - medium
+                color = 'rgba(255, 215, 0, 0.35)'  # Yellow - medium (was 0.12)
             else:
-                color = 'rgba(255, 0, 0, 0.1)'  # Red - low GEX
+                color = 'rgba(255, 0, 0, 0.3)'  # Red - low GEX (was 0.1)
             
             # Add colored horizontal zone
             fig2.add_hrect(
@@ -391,8 +404,8 @@ with col_right:
                 close=prices['Close'],
                 increasing_line_color='#00FF00',
                 decreasing_line_color='#FF0000',
-                increasing_fillcolor='rgba(0,255,0,0.3)',
-                decreasing_fillcolor='rgba(255,0,0,0.3)',
+                increasing_fillcolor='rgba(0,255,0,0.2)',  # More transparent candles
+                decreasing_fillcolor='rgba(255,0,0,0.2)',
                 line=dict(width=1),
                 showlegend=False
             ),
@@ -402,9 +415,9 @@ with col_right:
         # BOTTOM CHART: Call/Put dominance zones + candlesticks
         for i in range(len(strikes) - 1):
             if call_gex_smooth[i] > put_gex_smooth[i]:
-                color = 'rgba(255, 215, 0, 0.15)'  # Yellow - call heavy
+                color = 'rgba(255, 215, 0, 0.4)'  # Yellow - call heavy (was 0.15)
             else:
-                color = 'rgba(74, 158, 255, 0.15)'  # Blue - put heavy
+                color = 'rgba(74, 158, 255, 0.4)'  # Blue - put heavy (was 0.15)
             
             fig2.add_hrect(
                 y0=strikes[i],
@@ -425,8 +438,8 @@ with col_right:
                 close=prices['Close'],
                 increasing_line_color='#00FF00',
                 decreasing_line_color='#FF0000',
-                increasing_fillcolor='rgba(0,255,0,0.3)',
-                decreasing_fillcolor='rgba(255,0,0,0.3)',
+                increasing_fillcolor='rgba(0,255,0,0.2)',
+                decreasing_fillcolor='rgba(255,0,0,0.2)',
                 line=dict(width=1),
                 showlegend=False
             ),
