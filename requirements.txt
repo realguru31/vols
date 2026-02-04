@@ -5,3 +5,5 @@ pandas
 plotly
 scipy
 tvdatafeed
+requests
+tvdatafeed
