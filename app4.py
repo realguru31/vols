@@ -392,7 +392,7 @@ with col_left:
         margin=dict(l=10, r=10, t=10, b=10)
     )
     
-    st.plotly_chart(fig1, width='stretch')
+    st.plotly_chart(fig1, width='stretch', key='gex_bars_chart')
 
 with col_right:
     st.markdown("#### GEX Profile + Price Action")
@@ -598,8 +598,7 @@ with col_right:
             row=2, col=1
         )
         
-        st.plotly_chart(fig2, width='stretch')
-        st.plotly_chart(fig2, width='stretch')
+        st.plotly_chart(fig2, width='stretch', key='gex_overlay_chart')
     else:
         st.warning("No price data available")
 
