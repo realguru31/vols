@@ -149,7 +149,10 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
         # Try to get spot price from Barchart metadata
         spot = None
         if 'meta' in data and 'quote' in data['meta']:
-            spot = data['meta']['quote'].get('lastPrice') or data['meta']['quote'].get('close')
+            spot_raw = data['meta']['quote'].get('lastPrice') or data['meta']['quote'].get('close')
+            if spot_raw:
+                # Remove commas and convert to float
+                spot = float(str(spot_raw).replace(',', ''))
         
         # If no spot in metadata, calculate from ATM options
         if spot is None:
@@ -160,9 +163,11 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
             
             if all_options:
                 # Find ATM strike (highest OI or volume)
-                sorted_by_oi = sorted(all_options, key=lambda x: float(x.get('openInterest', 0)), reverse=True)
+                sorted_by_oi = sorted(all_options, key=lambda x: float(str(x.get('openInterest', 0)).replace(',', '')), reverse=True)
                 if sorted_by_oi:
-                    spot = float(sorted_by_oi[0].get('lastPrice', 0)) * 10  # Rough estimate
+                    # Use strike price of highest OI option as proxy for spot
+                    strike_str = sorted_by_oi[0].get('strikePrice', 0)
+                    spot = float(str(strike_str).replace(',', ''))
             
             # Fallback: use TradingView for spot only
             if spot is None or spot == 0:
@@ -182,6 +187,13 @@ def fetch_barchart_options(ticker_symbol, expiry_offset=0):
             return {'error': 'No options data returned from API', 'type': 'EmptyDataError', 'traceback': 'API returned empty options list'}
         
         df = pd.DataFrame(data_list)
+        
+        # Strip commas from numeric fields before conversion
+        numeric_fields = ['strikePrice', 'openInterest', 'gamma', 'theta', 'lastPrice', 'volume']
+        for field in numeric_fields:
+            if field in df.columns:
+                df[field] = df[field].astype(str).str.replace(',', '')
+        
         df['strikePrice'] = pd.to_numeric(df['strikePrice'], errors='coerce')
         df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').fillna(0).astype(int)
         df['gamma'] = pd.to_numeric(df['gamma'], errors='coerce').fillna(0)
@@ -278,6 +290,12 @@ if 'error' in result:
 spot = result['spot']
 expiry = result['expiry']
 gex_df = compute_gex(result['calls'], result['puts'])
+
+# Debug info
+with st.expander("🔍 Debug Info", expanded=False):
+    st.write(f"**Spot Price:** ${spot:.2f}")
+    st.write(f"**Expiration:** {expiry}")
+    st.write(f"**Total Options:** {len(result['calls'])} calls, {len(result['puts'])} puts")
 
 # Filter
 price_range = spot * (RANGE_PCT / 100)
