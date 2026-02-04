@@ -1,20 +1,28 @@
 import streamlit as st
+import pandas as pd
 from tvDatafeed import TvDatafeed, Interval
 
-# Initialize the feed (No-login method)
+st.title("Data Dashboard")
+
+# Initialize the feed
 tv = TvDatafeed()
 
-st.title("SPY 1-Minute Data")
+# Define the asset you want to view
+symbol = 'XAUUSD' # Gold
+exchange = 'OANDA'
+n_bars = 100
 
-# Fetch 1-minute data for SPY
-# Symbol: SPY, Exchange: AMEX, Interval: 1 minute
-data = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_1_minute, n_bars=100)
+st.subheader(f"{symbol} 1-Minute Data")
 
-if data is not None:
-    st.subheader("Last 100 Minutes of SPY")
-    # Display line chart of closing prices
+# Fetch data
+data = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_minute, n_bars=n_bars)
+
+if data is not None and not data.empty:
+    # Ensure the dataframe is correctly formatted for charting
     st.line_chart(data['close'])
-    # Display raw dataframe
-    st.write(data)
+    st.write(f"Showing last {n_bars} rows of data:")
+    st.dataframe(data)
 else:
-    st.error("Failed to fetch data. Check your connection or symbol/exchange.")
+    st.error(f"Failed to fetch data for {symbol} on {exchange}.")
+    # Optional: Display a blank chart with the expected range if you want to see the axis scale
+    # st.line_chart(pd.DataFrame({'close': [5000, 5100]})) 
