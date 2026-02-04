@@ -467,21 +467,19 @@ with col_right:
         )
         
         # Add GEX curves as VERTICAL profiles (rotated 90 degrees)
-        # FLIPPED: Curves extend RIGHT to LEFT so peaks point toward candles
-        gex_x_offset = time_max + time_range * 0.25  # Start 25% beyond last candle (right edge)
-        gex_x_scale = (time_range * 0.2) / max_gex  # Scale to fit in 20% of time range
+        # Curves extend RIGHT to LEFT, starting immediately after last candle
+        gex_x_offset = time_max + time_range * 0.02  # Start just 2% beyond candles
+        gex_x_scale = (time_range * 0.25) / max_gex  # Scale to fit in 25% of time range
         
-        # Total GEX (orange curve) - FLIPPED direction
-        gex_x_total = [gex_x_offset - (val * gex_x_scale) for val in total_gex_smooth]  # SUBTRACT instead of add
+        # Total GEX (orange curve) - NO FILL
+        gex_x_total = [gex_x_offset - (val * gex_x_scale) for val in total_gex_smooth]
         fig2.add_trace(
             go.Scatter(
                 x=gex_x_total,
                 y=strikes,
                 mode='lines',
-                line=dict(color='orange', width=4),  # Thicker
+                line=dict(color='orange', width=3),
                 name='Total GEX',
-                fill='tonextx',  # Fill toward next X (rightward)
-                fillcolor='rgba(255, 165, 0, 0.4)',  # More opaque
                 hovertemplate='Strike: %{y:.0f}<br>GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=total_gex_smooth,
                 showlegend=False
@@ -489,14 +487,14 @@ with col_right:
             row=1, col=1
         )
         
-        # Call GEX (green curve) - FLIPPED
+        # Call GEX (green curve) - NO FILL
         gex_x_calls = [gex_x_offset - (val * gex_x_scale) for val in call_gex_smooth]
         fig2.add_trace(
             go.Scatter(
                 x=gex_x_calls,
                 y=strikes,
                 mode='lines',
-                line=dict(color='green', width=3),
+                line=dict(color='green', width=2.5),
                 name='Call GEX',
                 hovertemplate='Strike: %{y:.0f}<br>Call GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=call_gex_smooth,
@@ -505,14 +503,14 @@ with col_right:
             row=1, col=1
         )
         
-        # Put GEX (red curve) - FLIPPED
+        # Put GEX (red curve) - NO FILL
         gex_x_puts = [gex_x_offset - (val * gex_x_scale) for val in put_gex_smooth]
         fig2.add_trace(
             go.Scatter(
                 x=gex_x_puts,
                 y=strikes,
                 mode='lines',
-                line=dict(color='red', width=3),
+                line=dict(color='red', width=2.5),
                 name='Put GEX',
                 hovertemplate='Strike: %{y:.0f}<br>Put GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=put_gex_smooth,
@@ -521,12 +519,16 @@ with col_right:
             row=1, col=1
         )
         
-        # Spot price line
+        # Spot price line with better annotation
         fig2.add_hline(
             y=spot,
             line=dict(color='#FFD700', width=2, dash='dot'),
-            annotation_text=f"${spot:.2f}",
-            annotation_position="right",
+            annotation=dict(
+                text=f"${spot:.2f}",
+                xref="paper",
+                x=0.02,  # Left side, 2% from edge
+                font=dict(color='#FFD700', size=12)
+            ),
             row=1, col=1
         )
         
@@ -549,24 +551,22 @@ with col_right:
             row=2, col=1
         )
         
-        # Net GEX (call - put) - GOLD curve - FLIPPED
+        # Net GEX (call - put) - GOLD curve - NO FILL
         net_gex_smooth = call_gex_smooth - put_gex_smooth
         max_net = max(abs(net_gex_smooth.min()), abs(net_gex_smooth.max()))
         if max_net == 0:
             max_net = 1
         
-        net_gex_x_scale = (time_range * 0.2) / max_net
-        gex_x_net = [gex_x_offset - (val * net_gex_x_scale) for val in net_gex_smooth]  # FLIPPED: subtract instead of add
+        net_gex_x_scale = (time_range * 0.25) / max_net
+        gex_x_net = [gex_x_offset - (val * net_gex_x_scale) for val in net_gex_smooth]
         
         fig2.add_trace(
             go.Scatter(
                 x=gex_x_net,
                 y=strikes,
                 mode='lines',
-                line=dict(color='gold', width=4),
+                line=dict(color='gold', width=3),
                 name='Net GEX',
-                fill='tonextx',  # Fill toward next X
-                fillcolor='rgba(255, 215, 0, 0.4)',
                 hovertemplate='Strike: %{y:.0f}<br>Net GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=net_gex_smooth,
                 showlegend=False
@@ -574,12 +574,16 @@ with col_right:
             row=2, col=1
         )
         
-        # Spot line
+        # Spot line with better annotation
         fig2.add_hline(
             y=spot,
             line=dict(color='#FFD700', width=2, dash='dot'),
-            annotation_text=f"${spot:.2f}",
-            annotation_position="right",
+            annotation=dict(
+                text=f"${spot:.2f}",
+                xref="paper",
+                x=0.02,  # Left side
+                font=dict(color='#FFD700', size=12)
+            ),
             row=2, col=1
         )
         
@@ -594,12 +598,12 @@ with col_right:
             hovermode='closest'
         )
         
-        # Set X-axis to show EXTENDED range on right (includes GEX curves)
-        x_range_extended = time_max + time_range * 0.3  # Extend 30% to the right
+        # Set X-axis to show curves right after candles
+        x_range_extended = time_max + time_range * 0.05  # Just 5% padding on right
         fig2.update_xaxes(
             gridcolor='#1a1f3a',
             showgrid=True,
-            range=[time_min, x_range_extended],  # Extended range to show curves
+            range=[time_min, x_range_extended],
             fixedrange=False
         )
         
