@@ -392,7 +392,7 @@ with col_left:
         margin=dict(l=10, r=10, t=10, b=10)
     )
     
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, width='stretch')
 
 with col_right:
     st.markdown("#### GEX Zones + Price Action")
@@ -407,12 +407,24 @@ with col_right:
         put_gex_vals = gex_filt['put_gex'].values
         total_gex = gex_filt['total_gex'].values
         
-        # Full trading day range
-        today = pd.Timestamp.now(tz='America/New_York').normalize()
+        # Full trading day range (tz-naive to match TradingView data)
+        today = pd.Timestamp.now().normalize()  # No timezone
         market_open = today + timedelta(hours=9, minutes=30)
         market_close = today + timedelta(hours=16)
-        x_min = min(prices.index.min(), market_open) if not prices.empty else market_open
-        x_max = max(prices.index.max(), market_close) if not prices.empty else market_close
+        
+        # Safe comparison handling both tz-naive and tz-aware
+        if not prices.empty:
+            if prices.index.tz is not None:
+                # Price data has timezone, remove it for comparison
+                x_min = min(prices.index.min().tz_localize(None), market_open)
+                x_max = max(prices.index.max().tz_localize(None), market_close)
+            else:
+                # Both tz-naive, direct comparison works
+                x_min = min(prices.index.min(), market_open)
+                x_max = max(prices.index.max(), market_close)
+        else:
+            x_min = market_open
+            x_max = market_close
         
         # Smooth GEX using Gaussian filter
         if len(strikes) > 3:
@@ -580,7 +592,7 @@ with col_right:
             row=2, col=1
         )
         
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
     else:
         st.warning("No price data available")
 
