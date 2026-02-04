@@ -27,38 +27,52 @@ st.markdown("""
 # Initialize TradingView datafeed (for candlestick data only)
 @st.cache_resource
 def get_tv_datafeed():
-    """Initialize TradingView datafeed (cached)"""
-    return TvDatafeed()
+    """Initialize TradingView datafeed (cached) - suppresses errors"""
+    import warnings
+    import logging
+    
+    # Suppress TradingView warnings/errors
+    logging.getLogger('tvDatafeed').setLevel(logging.CRITICAL)
+    warnings.filterwarnings('ignore')
+    
+    try:
+        return TvDatafeed()
+    except:
+        return None
 
 # Helper to get spot price from TradingView (fallback only)
 def get_tv_spot_price(tv, symbol="SPY"):
     """Get spot from TradingView as fallback"""
-    # SPY can be on AMEX, NYSE, or NASDAQ depending on TradingView's data
+    if tv is None:
+        return None
+    
     exchanges_to_try = ['AMEX', 'NYSE', 'NASDAQ']
     
     for exchange in exchanges_to_try:
         try:
-            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_minute, n_bars=1)
+            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_minute, n_bars=1, timeout=5)
             if df is not None and not df.empty:
                 return df['close'].iloc[-1]
-        except:
-            continue
+        except Exception as e:
+            continue  # Silently try next exchange
     return None
 
 # Helper to get candlesticks from TradingView
 def get_tv_prices(tv, symbol="SPY", n_bars=100):
     """Get 5-min candlestick data from TradingView"""
-    # Try multiple exchanges
+    if tv is None:
+        return None
+    
     exchanges_to_try = ['AMEX', 'NYSE', 'NASDAQ']
     
     for exchange in exchanges_to_try:
         try:
-            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_5_minute, n_bars=n_bars)
+            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_5_minute, n_bars=n_bars, timeout=5)
             if df is not None and not df.empty:
                 df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
                 return df
-        except:
-            continue
+        except Exception as e:
+            continue  # Silently try next exchange
     return None
 
 # Calculate options expiration dates (3rd Friday of month)
@@ -253,7 +267,7 @@ def compute_gex(calls, puts):
 st.markdown("## 📊 GEX Profile Analyzer")
 
 # Info banner
-st.info("✅ **Data Sources:** Barchart (Options + Spot) | TradingView (Candlesticks) | Calculated (Expirations)")
+st.info("✅ **Data:** Barchart (Options + Spot) | TradingView (Candles - optional) | Calculated (Expirations)")
 
 # Controls
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -309,11 +323,15 @@ if len(gex_filt) == 0:
     st.warning("No data")
     st.stop()
 
-# Get candlestick price data (TradingView only - no rate limits!)
+# Get candlestick price data (TradingView - optional, non-fatal)
 @st.cache_data(ttl=300)
 def get_prices(ticker):
+    """Fetch price data from TradingView - returns None if fails (non-fatal)"""
     try:
         tv = get_tv_datafeed()
+        if tv is None:
+            return None
+        
         hist = get_tv_prices(tv, symbol=ticker, n_bars=100)
         
         if hist is None or hist.empty:
@@ -325,6 +343,7 @@ def get_prices(ticker):
         
         return hist_today if not hist_today.empty else hist
     except Exception as e:
+        # TradingView failed - not critical, just return None
         return None
 
 prices = get_prices(TICKER)
@@ -396,9 +415,10 @@ with col_left:
 
 with col_right:
     st.markdown("#### GEX Profile + Price Action")
-    st.caption(f"GEX curves overlaid on price chart (strikes: {len(gex_filt)})")
     
     if prices is not None and len(prices) > 0:
+        st.caption(f"GEX curves overlaid on price chart (strikes: {len(gex_filt)})")
+        
         fig2 = make_subplots(rows=2, cols=1, shared_xaxes=False, vertical_spacing=0.05)
         
         strikes = gex_filt['strike'].values
@@ -461,7 +481,7 @@ with col_right:
                 line=dict(color='orange', width=4),  # Thicker
                 name='Total GEX',
                 fill='tonextx',  # Fill toward next X (rightward)
-                fillcolor='rgba(255, 165, 0, 0.2)',  # More opaque
+                fillcolor='rgba(255, 165, 0, 0.4)',  # More opaque
                 hovertemplate='Strike: %{y:.0f}<br>GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=total_gex_smooth,
                 showlegend=False
@@ -546,7 +566,7 @@ with col_right:
                 line=dict(color='gold', width=4),
                 name='Net GEX',
                 fill='tonextx',  # Fill toward next X
-                fillcolor='rgba(255, 215, 0, 0.2)',
+                fillcolor='rgba(255, 215, 0, 0.4)',
                 hovertemplate='Strike: %{y:.0f}<br>Net GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=net_gex_smooth,
                 showlegend=False
@@ -600,7 +620,8 @@ with col_right:
         
         st.plotly_chart(fig2, width='stretch', key='gex_overlay_chart')
     else:
-        st.warning("No price data available")
+        st.warning("⚠️ Price data unavailable (TradingView connection issue)")
+        st.info("GEX analysis is still working - only price overlay is affected. Try refreshing or check back later.")
 
 # Footer
 if prices is not None and len(prices) > 0:
