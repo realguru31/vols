@@ -297,39 +297,17 @@ with st.expander("🔍 Debug Info", expanded=False):
     st.write(f"**Expiration:** {expiry}")
     st.write(f"**Total Options:** {len(result['calls'])} calls, {len(result['puts'])} puts")
 
-# Filter
+# Filter for price range only - keep ALL strikes including zero GEX
 price_range = spot * (RANGE_PCT / 100)
 gex_filt = gex_df[
     (gex_df['strike'] >= spot - price_range) &
-    (gex_df['strike'] <= spot + price_range) &
-    ((gex_df['call_gex'] != 0) | (gex_df['put_gex'] != 0))
+    (gex_df['strike'] <= spot + price_range)
 ]
+# Don't filter out zero GEX - we want all $1 strikes!
 
 if len(gex_filt) == 0:
     st.warning("No data")
     st.stop()
-
-# Interpolate to create $1 strike intervals for smoother curves
-if len(gex_filt) > 2:
-    strikes_orig = gex_filt['strike'].values
-    
-    # Create new strikes at $1 intervals
-    min_strike = int(strikes_orig.min())
-    max_strike = int(strikes_orig.max())
-    strikes_interp = np.arange(min_strike, max_strike + 1, 1)
-    
-    # Interpolate GEX values
-    call_gex_interp = np.interp(strikes_interp, strikes_orig, gex_filt['call_gex'].values)
-    put_gex_interp = np.interp(strikes_interp, strikes_orig, gex_filt['put_gex'].values)
-    
-    # Create new filtered dataframe with $1 intervals
-    gex_filt = pd.DataFrame({
-        'strike': strikes_interp,
-        'call_gex': call_gex_interp,
-        'put_gex': put_gex_interp,
-        'net_gex': call_gex_interp - put_gex_interp,
-        'total_gex': call_gex_interp + put_gex_interp
-    })
 
 # Get candlestick price data (TradingView only - no rate limits!)
 @st.cache_data(ttl=300)
