@@ -9,3 +9,4 @@ pandas
 streamlit-extras
 st-pages
 pymongo
+git+https://github.com/rongardF/tvdatafeed.git
