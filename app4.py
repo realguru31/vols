@@ -27,52 +27,36 @@ st.markdown("""
 # Initialize TradingView datafeed (for candlestick data only)
 @st.cache_resource
 def get_tv_datafeed():
-    """Initialize TradingView datafeed (cached) - suppresses errors"""
-    import warnings
-    import logging
-    
-    # Suppress TradingView warnings/errors
-    logging.getLogger('tvDatafeed').setLevel(logging.CRITICAL)
-    warnings.filterwarnings('ignore')
-    
-    try:
-        return TvDatafeed()
-    except:
-        return None
+    """Initialize TradingView datafeed (cached)"""
+    return TvDatafeed()
 
 # Helper to get spot price from TradingView (fallback only)
 def get_tv_spot_price(tv, symbol="SPY"):
     """Get spot from TradingView as fallback"""
-    if tv is None:
-        return None
-    
     exchanges_to_try = ['AMEX', 'NYSE', 'NASDAQ']
     
     for exchange in exchanges_to_try:
         try:
-            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_minute, n_bars=1, timeout=5)
+            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_minute, n_bars=1)
             if df is not None and not df.empty:
                 return df['close'].iloc[-1]
-        except Exception as e:
-            continue  # Silently try next exchange
+        except:
+            continue
     return None
 
 # Helper to get candlesticks from TradingView
 def get_tv_prices(tv, symbol="SPY", n_bars=100):
     """Get 5-min candlestick data from TradingView"""
-    if tv is None:
-        return None
-    
     exchanges_to_try = ['AMEX', 'NYSE', 'NASDAQ']
     
     for exchange in exchanges_to_try:
         try:
-            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_5_minute, n_bars=n_bars, timeout=5)
+            df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_5_minute, n_bars=n_bars)
             if df is not None and not df.empty:
                 df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
                 return df
-        except Exception as e:
-            continue  # Silently try next exchange
+        except:
+            continue
     return None
 
 # Calculate options expiration dates (3rd Friday of month)
@@ -323,15 +307,12 @@ if len(gex_filt) == 0:
     st.warning("No data")
     st.stop()
 
-# Get candlestick price data (TradingView - optional, non-fatal)
+# Get candlestick price data (TradingView)
 @st.cache_data(ttl=300)
 def get_prices(ticker):
-    """Fetch price data from TradingView - returns None if fails (non-fatal)"""
+    """Fetch price data from TradingView"""
     try:
         tv = get_tv_datafeed()
-        if tv is None:
-            return None
-        
         hist = get_tv_prices(tv, symbol=ticker, n_bars=100)
         
         if hist is None or hist.empty:
@@ -342,8 +323,7 @@ def get_prices(ticker):
         hist_today = hist[hist.index.date >= today.date()]
         
         return hist_today if not hist_today.empty else hist
-    except Exception as e:
-        # TradingView failed - not critical, just return None
+    except:
         return None
 
 prices = get_prices(TICKER)
