@@ -461,7 +461,7 @@ with col_right:
                 line=dict(color='orange', width=4),  # Thicker
                 name='Total GEX',
                 fill='tonextx',  # Fill toward next X (rightward)
-                fillcolor='rgba(255, 165, 0, 0.4)',  # More opaque
+                fillcolor='rgba(255, 165, 0, 0.2)',  # More opaque
                 hovertemplate='Strike: %{y:.0f}<br>GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=total_gex_smooth,
                 showlegend=False
@@ -546,7 +546,7 @@ with col_right:
                 line=dict(color='gold', width=4),
                 name='Net GEX',
                 fill='tonextx',  # Fill toward next X
-                fillcolor='rgba(255, 215, 0, 0.4)',
+                fillcolor='rgba(255, 215, 0, 0.2)',
                 hovertemplate='Strike: %{y:.0f}<br>Net GEX: %{customdata:,.0f}<extra></extra>',
                 customdata=net_gex_smooth,
                 showlegend=False
