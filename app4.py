@@ -186,7 +186,7 @@ with col1:
 with col2:
     EXPIRY = st.number_input("Expiry", 0, 20, 1, key="expiry", label_visibility="collapsed")
 with col3:
-    RANGE_PCT = st.slider("Range", 5, 30, 15, key="range", label_visibility="collapsed")
+    RANGE_PCT = st.slider("Range", 2, 4, 6, key="range", label_visibility="collapsed")
 with col4:
     if st.button("🔄"):
         st.cache_data.clear()
